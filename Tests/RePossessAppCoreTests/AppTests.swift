@@ -415,3 +415,96 @@ import Testing
         #expect(error.description.contains("api.anthropic.com"))
     }
 }
+
+@Suite struct RecognizerSetupTests {
+    @Test func theDraftGivesGuidanceForEachField() throws {
+        var draft = RecognizerDraft(provider: .anthropic)
+        #expect(draft.showsModel && !draft.showsAddress)
+        #expect(draft.modelProblem == "Enter the provider's name for a model that reads images.")
+        #expect(draft.configuration == nil)
+        draft.model = "invented-model"
+        #expect(draft.modelProblem == nil && draft.configuration?.provider == .anthropic)
+
+        var openai = RecognizerDraft(provider: .openai, model: "invented-model")
+        #expect(openai.showsAddress && openai.defaultAddress == "https://api.openai.com/v1/")
+        #expect(openai.addressProblem == nil && openai.configuration?.baseURL == nil)
+        openai.address = "llm.invented.example"
+        #expect(openai.addressProblem == "Enter a full address that starts with https://.")
+        openai.address = "http://llm.invented.example/v1/"
+        #expect(openai.addressProblem?.hasPrefix("Use an https address") == true && openai.configuration == nil)
+        openai.address = "https://llm.invented.example/v1/"
+        #expect(openai.addressProblem == nil)
+        #expect(openai.configuration?.receivingHost == "llm.invented.example")
+
+        let ollama = RecognizerDraft(provider: .ollama, model: "invented-model", address: "http://localhost:11434")
+        #expect(ollama.addressProblem == nil && ollama.configuration?.sendsPageImages == false)
+        // No field mentions a command-line option.
+        for provider in RecognizerProvider.allCases {
+            let empty = RecognizerDraft(provider: provider, address: "ftp://invented")
+            for text in [empty.modelProblem, empty.addressProblem].compactMap({ $0 }) {
+                #expect(!text.contains("--"))
+            }
+        }
+    }
+
+    @Test func aDraftFromASavedConfigurationKeepsItsValues() throws {
+        let saved = try RecognizerConfiguration(
+            provider: .openai,
+            model: "invented-model",
+            baseURL: URL(string: "https://llm.invented.example/v1/")
+        )
+        let draft = RecognizerDraft(saved)
+        #expect(draft.provider == .openai && draft.model == "invented-model")
+        #expect(draft.address == "https://llm.invented.example/v1/")
+        #expect(PageImageDestination(try #require(draft.configuration)) == PageImageDestination(saved))
+        let local = try RecognizerConfiguration(provider: .mlx, modelPath: "/tmp/invented-model")
+        #expect(RecognizerDraft(local).configuration?.modelPath == "/tmp/invented-model")
+    }
+
+    @Test func readinessSaysWhatTheRecognizerNeeds() throws {
+        let mlx = try RecognizerConfiguration(provider: .mlx)
+        let anthropic = try RecognizerConfiguration(provider: .anthropic, model: "invented-model")
+        let client = try RecognizerConfiguration(provider: .client)
+        #expect(RecognizerReadiness.of(nil, modelPresent: false, apiKeySource: nil) == .off)
+        #expect(RecognizerReadiness.of(mlx, modelPresent: false, apiKeySource: nil) == .modelRequired)
+        #expect(RecognizerReadiness.of(mlx, modelPresent: true, apiKeySource: nil) == .ready)
+        let ownModel = try RecognizerConfiguration(provider: .mlx, modelPath: "/tmp/invented-model")
+        #expect(RecognizerReadiness.of(ownModel, modelPresent: false, apiKeySource: nil) == .ready)
+        #expect(RecognizerReadiness.of(anthropic, modelPresent: false, apiKeySource: nil) == .apiKeyRequired)
+        #expect(
+            RecognizerReadiness.of(anthropic, modelPresent: false, apiKeySource: "the login keychain") == .ready
+        )
+        #expect(RecognizerReadiness.of(client, modelPresent: false, apiKeySource: nil) == .clientOnly)
+        let broken = RecognizerReadiness.of(nil, error: "invented error", modelPresent: true, apiKeySource: nil)
+        #expect(broken == .unreadable("invented error") && broken.needsAction)
+        #expect(RecognizerReadiness.modelRequired.title == "Model Required")
+        #expect(!RecognizerReadiness.ready.needsAction && RecognizerReadiness.apiKeyRequired.needsAction)
+    }
+
+    @MainActor @Test func offTakesEffectAtOnceAndTheReadinessFollowsTheSavedConfiguration() throws {
+        let library = try temporaryLibrary("readiness")
+        let model = AppModel(
+            options: AppOptions(libraryRoot: library.root, isDefaultLibrary: false, usesKeychain: false),
+            defaults: UserDefaults(suiteName: "repossess-test-\(UUID().uuidString)")!
+        )
+        #expect(model.recognizerReadiness == .off)
+        let anthropic = try RecognizerConfiguration(provider: .anthropic, model: "invented-model")
+        var consent = PageImageConsent()
+        consent.grant(anthropic)
+        try model.setRecognizer(anthropic, consent: consent)
+        // Without the Keychain, a key can come only from the environment.
+        let fromEnvironment = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"].map { !$0.isEmpty } ?? false
+        #expect(model.recognizerReadiness == (fromEnvironment ? .ready : .apiKeyRequired))
+        try model.turnRecognitionOff()
+        #expect(model.recognizer == nil && model.recognizerReadiness == .off)
+        #expect(try RecognizerConfiguration.load(from: library.root) == nil)
+        #expect(try library.activeRecognitionKey() == nil)
+    }
+
+    @Test func downloadProgressInWords() {
+        let state = ModelDownloadState.stopped(done: 1_200_000_000, total: 5_800_000_000)
+        #expect(state.progressText == "1.2 GB of 5.8 GB" && !state.isRunning)
+        #expect(ModelDownloadState.running(done: 0, total: 10).isRunning)
+        #expect(ModelDownloadState.finished.bytes == nil)
+    }
+}

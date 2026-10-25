@@ -49,10 +49,8 @@ public final class AppModel {
     private var retry: (trigger: RefreshTrigger, at: Date)?
     private var download: Task<Void, Never>?
 
-    /// The model download's progress from 0 to 1, while it runs or after it stops.
-    public private(set) var downloadFraction: Double?
-    /// The model download's last message.
-    public private(set) var downloadMessage: String?
+    /// The model download's state.
+    public private(set) var downloadState = ModelDownloadState.idle
     /// Whether the model download is running.
     public var downloading: Bool { download != nil }
     private var monitor: NWPathMonitor?
@@ -409,6 +407,28 @@ public final class AppModel {
         options.usesKeychain && SystemAPIKeychain().exists(provider: provider.rawValue)
     }
 
+    /// Where the provider's API key would come from, without reading it:
+    /// an environment variable's name, "the login keychain", or `nil` when there is none.
+    /// The background recognizer runs with the app's environment, so a variable counts.
+    public func apiKeySource(_ provider: RecognizerProvider) -> String? {
+        let environment = ProcessInfo.processInfo.environment
+        if let variable = provider.apiKeyVariables.first(where: { !(environment[$0] ?? "").isEmpty }) {
+            return variable
+        }
+        return hasAPIKey(provider) ? "the login keychain" : nil
+    }
+
+    /// Whether the saved recognizer can run, and what it needs when it cannot.
+    public var recognizerReadiness: RecognizerReadiness {
+        let configuration = snapshot.recognizer
+        return RecognizerReadiness.of(
+            configuration,
+            error: snapshot.recognizerError,
+            modelPresent: configuration?.provider == .mlx && modelStore.locate() != nil,
+            apiKeySource: configuration.flatMap { $0.provider.needsAPIKey ? apiKeySource($0.provider) : nil }
+        )
+    }
+
     /// The pinned model's store in this library.
     public var modelStore: ModelStore { ModelStore(libraryRoot: options.libraryRoot) }
 
@@ -417,22 +437,29 @@ public final class AppModel {
     public func startModelDownload() {
         guard download == nil else { return }
         let store = modelStore
-        downloadFraction = 0
-        downloadMessage = "Starting the download of \(store.model.repository)."
+        let total = store.model.totalBytes
+        downloadState = .running(done: 0, total: total)
+        Log.recognition.notice("Starting the download of \(store.model.repository, privacy: .public)")
         download = Task {
             do {
                 let folder = try await store.download(
-                    progress: { line in Task { @MainActor in self.downloadMessage = line } },
+                    progress: { line in Log.recognition.info("\(line, privacy: .public)") },
                     bytes: { done, total in
-                        Task { @MainActor in self.downloadFraction = Double(done) / Double(max(total, 1)) }
+                        Task { @MainActor in
+                            if self.downloadState.isRunning { self.downloadState = .running(done: done, total: total) }
+                        }
                     }
                 )
-                downloadFraction = 1
-                downloadMessage = "The model is on this Mac, and every file matches its SHA-256: \(folder.path)"
-            } catch is CancellationError {
-                downloadMessage = "The download stopped. Start it again to continue where it stopped."
+                downloadState = .finished
+                Log.recognition.notice("The model is in \(folder.path, privacy: .public)")
             } catch {
-                downloadMessage = "\(error)"
+                // A stop reaches the download as an error from its request, which names the partial file.
+                if Task.isCancelled || error is CancellationError {
+                    let done = downloadState.bytes?.done ?? 0
+                    downloadState = .stopped(done: done, total: total)
+                } else {
+                    downloadState = .failed("\(error)")
+                }
             }
             download = nil
         }

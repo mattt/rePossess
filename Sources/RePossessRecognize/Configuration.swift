@@ -36,7 +36,7 @@ public enum RecognizerProvider: String, Sendable, Codable, CaseIterable {
     }
 
     /// The default API address.
-    var defaultBaseURL: URL? {
+    public var defaultBaseURL: URL? {
         switch self {
         case .anthropic: URL(string: "https://api.anthropic.com")
         case .openai: URL(string: "https://api.openai.com/v1/")
@@ -138,7 +138,7 @@ public struct RecognizerConfiguration: Sendable, Equatable, Codable {
     }
 
     /// Whether a URL names this Mac.
-    static func isLocal(_ url: URL) -> Bool {
+    public static func isLocal(_ url: URL) -> Bool {
         ["localhost", "127.0.0.1", "::1", "[::1]"].contains(url.host()?.lowercased() ?? "")
     }
 
