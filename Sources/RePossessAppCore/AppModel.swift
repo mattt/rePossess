@@ -356,31 +356,35 @@ public final class AppModel {
     // MARK: Pairing
 
     /// Pairs with a one-time code. Only the owner starts it, from the settings.
-    public func pair(code: String) async -> String {
-        guard options.usesKeychain else { return NoKeychain.message }
+    public func pair(code: String) async -> PairingOutcome {
+        guard options.usesKeychain else { return .pairingFailed(NoKeychainError()) }
         do {
             let result = try await Pairing(store: store).pair(code: code)
             updateSnapshot()
-            var message = "Paired as a desktop-macos device. The device token is in the login keychain."
-            if let older = result.olderService {
-                message += " The older item \"\(older)\" is still in the login keychain; rePossess no longer reads it."
-            }
-            return message
+            return .paired(olderService: result.olderService)
         } catch {
-            return "Pairing failed: \(error)"
+            return .pairingFailed(error)
         }
     }
 
     /// Deletes the device token items. Only the owner starts it, from the settings.
-    public func unpair() -> String {
-        guard options.usesKeychain else { return NoKeychain.message }
+    public func unpair() -> PairingOutcome {
+        guard options.usesKeychain else { return .pairingFailed(NoKeychainError()) }
         do {
             let deleted = try Pairing(store: store).unpair()
             updateSnapshot()
-            return Pairing.unpairMessage(deleted: deleted)
+            return .unpaired(deleted: deleted)
         } catch {
-            return "Unpairing failed: \(error)"
+            return PairingOutcome(succeeded: false, summary: "Unpairing failed.", details: "\(error)")
         }
+    }
+
+    /// Whether rePossess has a way to the tablet: the tablet is on USB, the Mac is paired,
+    /// or the library has refreshed before.
+    public var tabletReachable: Bool {
+        if snapshot.usbPresent || snapshot.library?.latestRefresh != nil { return true }
+        if case .paired = snapshot.pairing { return true }
+        return false
     }
 
     // MARK: Recognizer

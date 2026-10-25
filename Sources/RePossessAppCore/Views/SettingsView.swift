@@ -74,9 +74,14 @@ struct GeneralSettings: View {
     @State private var opensAtLogin = false
     @State private var loginNotice: Notice?
 
+    @AppStorage(SetupProgress.finishedKey) private var setupFinished = false
+
     var body: some View {
         let snapshot = model.snapshot
         Form {
+            if !setupFinished {
+                GetStartedSection(model: model, finished: $setupFinished)
+            }
             Section {
                 Picker("Refresh interval", selection: $model.intervalMinutes) {
                     ForEach(RefreshSchedule.choices, id: \.self) { minutes in
@@ -158,77 +163,11 @@ struct GeneralSettings: View {
     }
 }
 
-// MARK: Cloud
-
-struct CloudSettings: View {
-    @Bindable var model: AppModel
-    @State private var code = ""
-    @State private var message: String?
-    @State private var pairing = false
-    @State private var confirmUnpair = false
-
-    var body: some View {
-        Form {
-            switch model.snapshot.pairing {
-            case .keychainOff:
-                Section("Pairing") {
-                    Text(
-                        "This run of rePossess does not use the Keychain (--no-keychain), so it cannot pair, unpair, or refresh from the cloud."
-                    )
-                }
-            case .paired(let service):
-                Section("Pairing") {
-                    LabeledContent("Status") {
-                        Text("Paired. The device token is in the login keychain under \"\(service)\".")
-                    }
-                    Button("Unpair…", role: .destructive) { confirmUnpair = true }
-                        .confirmationDialog("Unpair rePossess?", isPresented: $confirmUnpair) {
-                            Button("Unpair", role: .destructive) { message = model.unpair() }
-                        } message: {
-                            Text(
-                                "rePossess deletes the device token from the login keychain and sends nothing to reMarkable. Remove the desktop-macos device on my.remarkable.com to revoke the token."
-                            )
-                        }
-                }
-            case .notPaired:
-                Section("Pairing") {
-                    Text(
-                        "Pairing adds this Mac to your reMarkable account as a desktop-macos device, so that rePossess can reach the tablet through reMarkable's cloud."
-                    )
-                    Link("Get a one-time code from my.remarkable.com", destination: CloudHosts.connectPage)
-                    HStack {
-                        TextField("One-time code", text: $code)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.body.monospaced())
-                            .frame(maxWidth: 160)
-                        Button("Pair") {
-                            pairing = true
-                            Task {
-                                message = await model.pair(code: code)
-                                code = ""
-                                pairing = false
-                            }
-                        }
-                        .disabled(!PairingCode.isPlausible(code) || pairing)
-                        if pairing { ProgressView().controlSize(.small) }
-                    }
-                }
-            }
-            if let message {
-                Section { Text(message).textSelection(.enabled) }
-            }
-            Section("Status") {
-                ForEach(model.snapshot.cloudLines, id: \.self) { Text($0) }
-            }
-        }
-        .formStyle(.grouped)
-    }
-}
-
 // MARK: Clients
 
 struct ClientSettings: View {
     @Bindable var model: AppModel
+    @AppStorage(SetupProgress.clientsKey) private var clientsOpened = false
     @State private var change: ClaudeDesktopConfig.Change?
     @State private var message: String?
 
@@ -260,6 +199,7 @@ struct ClientSettings: View {
             .padding()
         }
         .frame(minHeight: 480)
+        .onAppear { clientsOpened = true }
         .sheet(item: $change) { change in
             ConfigPreview(change: change, url: ClaudeDesktopConfig.defaultURL) { confirmed in
                 self.change = nil
@@ -368,6 +308,57 @@ struct FileText: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(.quaternary.opacity(0.5))
+        }
+    }
+}
+
+/// The first-run setup at the top of General: connect the tablet, then an AI client.
+/// Handwriting stays an optional later step. The owner can finish it or set it up later.
+struct GetStartedSection: View {
+    @Bindable var model: AppModel
+    @Binding var finished: Bool
+    @AppStorage(SettingsTab.storageKey) private var pane = SettingsTab.general
+    @AppStorage(SetupProgress.clientsKey) private var clientsOpened = false
+
+    var body: some View {
+        let connected = model.tabletReachable
+        Section {
+            LabeledContent("1. Connect the tablet") {
+                if connected {
+                    StatusLabel(title: model.snapshot.usbPresent ? "On USB" : "Connected", symbol: "checkmark.circle")
+                } else {
+                    StatusLabel(title: "Not Yet", symbol: "circle")
+                }
+            }
+            if !connected {
+                Text(
+                    "By USB: on the tablet, turn on Settings > General settings > Storage > USB web interface, then connect the cable. When macOS asks whether rePossess may find devices on your local network, choose Allow. rePossess never changes the tablet's settings."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                Button("Pair with reMarkable Cloud…") { pane = .cloud }
+            }
+            LabeledContent("2. Connect an AI client") {
+                StatusLabel(
+                    title: clientsOpened ? "Opened" : "Not Yet",
+                    symbol: clientsOpened ? "checkmark.circle" : "circle"
+                )
+            }
+            Button("Set Up MCP Clients…") { pane = .clients }
+            HStack {
+                Button("Set Up Later") { finished = true }
+                Spacer()
+                Button("Done") { finished = true }
+                    .disabled(!connected)
+            }
+        } header: {
+            Text("Get Started")
+        } footer: {
+            Text(
+                "Handwriting recognition is optional; turn it on later in Handwriting. Set Up Later hides these steps; nothing opens them again at login."
+            )
+            .foregroundStyle(.secondary)
         }
     }
 }

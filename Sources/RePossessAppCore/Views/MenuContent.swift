@@ -170,8 +170,16 @@ public struct RePossessMenuBarApp: App {
             object: nil,
             queue: .main
         ) { _ in MainActor.assumeIsolated { model.updateSnapshot() } }
+        let opensSetup = SetupProgress.atLaunch(
+            defaults: .standard,
+            tabletReachable: model.tabletReachable,
+            requestedPane: model.options.settingsAtLaunch
+        )
         if let pane = model.options.settingsAtLaunch {
             SettingsRouter.shared.open(pane)
+        } else if opensSetup {
+            // The setup is at the top of General.
+            SettingsRouter.shared.open(.general)
         }
         _model = State(initialValue: model)
     }

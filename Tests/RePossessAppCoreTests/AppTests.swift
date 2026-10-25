@@ -47,8 +47,10 @@ import Testing
             defaults: defaults
         )
         #expect(model.snapshot.pairing == .keychainOff)
-        #expect(await model.pair(code: "abcd1234") == NoKeychain.message)
-        #expect(model.unpair() == NoKeychain.message)
+        let paired = await model.pair(code: "abcd1234")
+        #expect(!paired.succeeded && paired.summary == NoKeychain.message && paired.keepsCode)
+        let unpaired = model.unpair()
+        #expect(!unpaired.succeeded && unpaired.summary == NoKeychain.message)
         #expect(throws: NoKeychainError.self) { try model.saveAPIKey("invented", provider: .anthropic) }
         #expect(!model.hasAPIKey(.anthropic))
         #expect(model.intervalMinutes == 15)
@@ -639,5 +641,49 @@ import Testing
         let unscheduled = StatusSnapshot(usbPresent: false, pairing: .notPaired, now: now)
         #expect(unscheduled.lastRefreshText == "Not yet")
         #expect(unscheduled.nextRefreshText == "When the tablet connects or on request")
+    }
+}
+
+@Suite struct SetupTests {
+    func defaults() -> UserDefaults {
+        UserDefaults(suiteName: "repossess-test-\(UUID().uuidString)")!
+    }
+
+    @Test func theSetupOpensOnceAndOnlyWithoutAWayToTheTablet() {
+        let fresh = defaults()
+        #expect(SetupProgress.atLaunch(defaults: fresh, tabletReachable: false, requestedPane: nil))
+        #expect(!SetupProgress.atLaunch(defaults: fresh, tabletReachable: false, requestedPane: nil))
+        #expect(!fresh.bool(forKey: SetupProgress.finishedKey))
+
+        let existing = defaults()
+        #expect(!SetupProgress.atLaunch(defaults: existing, tabletReachable: true, requestedPane: nil))
+        #expect(existing.bool(forKey: SetupProgress.finishedKey))
+
+        let requested = defaults()
+        #expect(!SetupProgress.atLaunch(defaults: requested, tabletReachable: false, requestedPane: .cloud))
+        #expect(SetupProgress.atLaunch(defaults: requested, tabletReachable: false, requestedPane: nil))
+
+        let later = defaults()
+        later.set(true, forKey: SetupProgress.finishedKey)
+        #expect(!SetupProgress.atLaunch(defaults: later, tabletReachable: false, requestedPane: nil))
+    }
+
+    @Test func aWrongCodeKeepsTheCodeAndSaysWhatToDo() {
+        let refused = PairingOutcome.pairingFailed(CloudError.registrationRefused(status: 400, message: "invented"))
+        #expect(!refused.succeeded && refused.keepsCode)
+        #expect(refused.summary.hasPrefix("reMarkable did not accept this code."))
+        #expect(refused.details?.contains("HTTP 400") == true)
+        let offline = PairingOutcome.pairingFailed(URLError(.notConnectedToInternet))
+        #expect(offline.summary.hasPrefix("rePossess could not reach reMarkable's cloud"))
+        #expect(PairingOutcome.pairingFailed(CloudError.invalidCode).summary.contains("eight letters or digits"))
+    }
+
+    @Test func theSummariesNeverNameAKeychainItem() {
+        let paired = PairingOutcome.paired(olderService: "rePossess spike 6")
+        #expect(paired.succeeded && !paired.keepsCode)
+        #expect(!paired.summary.contains("spike") && paired.details?.contains("rePossess spike 6") == true)
+        let unpaired = PairingOutcome.unpaired(deleted: ["rePossess", "rePossess spike 6"])
+        #expect(!unpaired.summary.contains("\"") && unpaired.summary.contains("my.remarkable.com"))
+        #expect(unpaired.details?.contains("rePossess spike 6") == true)
     }
 }
