@@ -449,9 +449,16 @@ struct Repossess {
                     "anchored": group.anchored, "strokes": group.strokes,
                 ]
             }
+            let images = scene.images.map { image -> [String: Any] in
+                [
+                    "x": Double(image.bounds.minX), "y": Double(image.bounds.minY),
+                    "width": Double(image.bounds.width), "height": Double(image.bounds.height),
+                    "file": image.fileName ?? NSNull(),
+                ]
+            }
             let object: [String: Any] = [
                 "width": Double(scene.width), "height": Double(scene.height), "lines": lines, "groups": groups,
-                "warnings": scene.warnings,
+                "images": images, "warnings": scene.warnings,
             ]
             let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
             print(String(decoding: data, as: UTF8.self))

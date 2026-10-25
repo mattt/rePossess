@@ -32,6 +32,16 @@ struct PlacedStroke {
     var offset: CGPoint
 }
 
+/// An image placed on the page.
+public struct PlacedImage {
+    /// The PNG file's name in the page's folder, or `nil` when the page names no file for the image.
+    public var fileName: String?
+    /// Maps a point in the image, from (0, 0) at its top left to (1, 1) at its bottom right, to page pixels.
+    public var transform: CGAffineTransform
+    /// The image's bounds in page pixels.
+    public var bounds: CGRect
+}
+
 /// A page, ready to draw.
 ///
 /// Coordinates are the tablet's pixels.
@@ -52,6 +62,10 @@ public struct PageScene {
     public var pdfPage: CGPDFPage?
     var strokes: [PlacedStroke] = []
     var highlights: [GlyphRange] = []
+    /// The images, in the order of the scene tree.
+    public private(set) var images: [PlacedImage] = []
+    /// The PNG data of the images, by file name.
+    var imageData: [String: Data] = [:]
     /// What could not be read or placed.
     public var warnings: [String] = []
     /// Whether to draw the typed text. The layout still places anchored strokes.
@@ -65,7 +79,8 @@ public struct PageScene {
     /// - Parameters:
     ///   - pageBytes: The `.rm` file, or `nil` for a page without one.
     ///   - pdfPage: The PDF page that the page shows, if any.
-    public init(pageBytes: [UInt8]?, pdfPage: CGPDFPage? = nil) {
+    ///   - image: Reads an image file of the page by name, or returns `nil`.
+    public init(pageBytes: [UInt8]?, pdfPage: CGPDFPage? = nil, image: (String) -> Data? = { _ in nil }) {
         self.pdfPage = pdfPage
         let result = pageBytes.map(readPage)
         warnings = result?.warnings ?? []
@@ -88,7 +103,18 @@ public struct PageScene {
                     warnings.append("The typed text could not be laid out: \(error)")
                 }
             }
-            collect(tree.root, offset: CGPoint(x: width / 2, y: 0))
+            let origin = CGPoint(x: width / 2, y: 0)
+            collect(tree.root, offset: origin, imageOffset: origin, files: tree.imageFiles)
+            for name in Set(images.compactMap(\.fileName)) {
+                if let data = image(name) {
+                    imageData[name] = data
+                } else {
+                    warnings.append("The image file \(name) is not in the document.")
+                }
+            }
+            if images.contains(where: { $0.fileName == nil }) {
+                warnings.append("An image on the page names no file.")
+            }
         }
 
         if let pdfPage {
@@ -101,6 +127,7 @@ public struct PageScene {
         for glyph in highlights {
             for r in glyph.rectangles { height = max(height, r.y + r.h + 40) }
         }
+        for image in images { height = max(height, image.bounds.maxY + 40) }
         height = ceil(height)
     }
 
@@ -127,7 +154,20 @@ public struct PageScene {
     static let topAnchor = CrdtId(0, 281_474_976_710_654)
     static let bottomAnchor = CrdtId(0, 281_474_976_710_655)
 
-    private mutating func collect(_ group: Group, offset: CGPoint) {
+    /// Collects the strokes, highlights, and images under a group.
+    ///
+    /// - Parameters:
+    ///   - offset: Added to a stroke's coordinates.
+    ///   - imageOffset: Added to an image's coordinates. It differs from `offset` in a group
+    ///     whose anchor names no character of the text: the tablet's PDF export drew two images
+    ///     in such groups at their own coordinates, without the group's x origin (2026-10-25).
+    ///     An image in a group whose anchor resolves moves as a stroke does (unchecked on the tablet).
+    private mutating func collect(
+        _ group: Group,
+        offset: CGPoint,
+        imageOffset: CGPoint,
+        files: [ImageKey: String]
+    ) {
         guard group.visible.value else { return }
         let children: [SceneItem?]
         do {
@@ -140,15 +180,24 @@ public struct PageScene {
             switch item {
             case .group(let child)?:
                 var childOffset = offset
+                var childImageOffset = imageOffset
                 if let anchor = child.anchorId?.value {
+                    let y = anchorY(anchor)
                     childOffset.x = width / 2 + CGFloat(child.anchorOriginX?.value ?? 0)
-                    childOffset.y = anchorY(anchor)
+                    childOffset.y = y ?? 0
+                    if y != nil { childImageOffset = childOffset }
                 }
-                collect(child, offset: childOffset)
+                collect(child, offset: childOffset, imageOffset: childImageOffset, files: files)
             case .line(let line)?:
                 if !line.tool.isEraser { strokes.append(PlacedStroke(line: line, offset: offset)) }
             case .glyphRange(let glyph)?:
                 highlights.append(glyph)
+            case .image(let image)?:
+                if let placed = Self.place(image, offset: imageOffset, fileName: files[image.key.value]) {
+                    images.append(placed)
+                } else {
+                    warnings.append("An image on the page has no vertices to place it.")
+                }
             case nil:
                 break
             }
@@ -159,12 +208,70 @@ public struct PageScene {
     ///
     /// The top and bottom anchors follow rmc: the top and the bottom of the text,
     /// or of the screen on a page without text (unchecked on the tablet).
-    private mutating func anchorY(_ id: CrdtId) -> CGFloat {
+    /// Returns `nil` when the anchor names no character of the text.
+    private mutating func anchorY(_ id: CrdtId) -> CGFloat? {
         if let y = layout?.baselines[id] { return y }
         if id == Self.topAnchor { return layout?.top ?? 0 }
         if id == Self.bottomAnchor { return layout?.bottom ?? screenHeight }
-        warnings.append("A stroke group is anchored to text that the page does not have (\(id)).")
-        return 0
+        warnings.append("A group is anchored to text that the page does not have (\(id)).")
+        return nil
+    }
+
+    /// Places an image by its vertices: the transform from the image's own coordinates to the page
+    /// comes from the first three vertices that are not in a line, in image and in page coordinates.
+    static func place(_ image: ImageItem, offset: CGPoint, fileName: String?) -> PlacedImage? {
+        guard let b = image.bounds else { return nil }
+        let bounds = CGRect(
+            x: CGFloat(b.minX) + offset.x,
+            y: CGFloat(b.minY) + offset.y,
+            width: CGFloat(b.maxX - b.minX),
+            height: CGFloat(b.maxY - b.minY)
+        )
+        // By default the image fills its bounds, top left at (0, 0).
+        var transform = CGAffineTransform(
+            a: bounds.width,
+            b: 0,
+            c: 0,
+            d: bounds.height,
+            tx: bounds.minX,
+            ty: bounds.minY
+        )
+        let v = image.vertices.map {
+            (
+                p: CGPoint(x: CGFloat($0.x) + offset.x, y: CGFloat($0.y) + offset.y),
+                q: CGPoint(x: CGFloat($0.u), y: CGFloat($0.v))
+            )
+        }
+        search: for i in 0 ..< v.count {
+            for j in i + 1 ..< v.count {
+                for k in j + 1 ..< v.count {
+                    let du1 = CGPoint(x: v[j].q.x - v[i].q.x, y: v[j].q.y - v[i].q.y)
+                    let du2 = CGPoint(x: v[k].q.x - v[i].q.x, y: v[k].q.y - v[i].q.y)
+                    let det = du1.x * du2.y - du2.x * du1.y
+                    guard abs(det) > 1e-6 else { continue }
+                    let dp1 = CGPoint(x: v[j].p.x - v[i].p.x, y: v[j].p.y - v[i].p.y)
+                    let dp2 = CGPoint(x: v[k].p.x - v[i].p.x, y: v[k].p.y - v[i].p.y)
+                    // M * [du1 du2] = [dp1 dp2], so M = [dp1 dp2] * inverse([du1 du2]).
+                    let a = (dp1.x * du2.y - dp2.x * du1.y) / det
+                    let c = (dp2.x * du1.x - dp1.x * du2.x) / det
+                    let bb = (dp1.y * du2.y - dp2.y * du1.y) / det
+                    let d = (dp2.y * du1.x - dp1.y * du2.x) / det
+                    let tx = v[i].p.x - (a * v[i].q.x + c * v[i].q.y)
+                    let ty = v[i].p.y - (bb * v[i].q.x + d * v[i].q.y)
+                    transform = CGAffineTransform(a: a, b: bb, c: c, d: d, tx: tx, ty: ty)
+                    break search
+                }
+            }
+        }
+        return PlacedImage(fileName: fileName, transform: transform, bounds: bounds)
+    }
+
+    /// Where each image goes among the typed paragraphs, in reading order:
+    /// the number of paragraphs whose last line is above the image's top.
+    /// The layout uses substitute fonts, so near a paragraph's end the count can be one off.
+    public var imageReadingPositions: [Int] {
+        let bottoms = layout?.paragraphBottoms ?? []
+        return images.map { image in bottoms.filter { $0 < image.bounds.minY }.count }
     }
 
     /// Tablet pixels per PDF point on a PDF page.
@@ -221,6 +328,7 @@ public struct PageScene {
         scene.pdfPage = nil
         scene.drawsText = false
         scene.highlights = []
+        scene.images = []
         return scene
     }
 
@@ -229,7 +337,7 @@ public struct PageScene {
 
     /// Whether the page draws anything.
     public var isEmpty: Bool {
-        strokes.isEmpty && highlights.isEmpty && pdfPage == nil && (layout?.lines.isEmpty ?? true)
+        strokes.isEmpty && highlights.isEmpty && images.isEmpty && pdfPage == nil && (layout?.lines.isEmpty ?? true)
     }
 }
 
@@ -310,6 +418,8 @@ public enum PageRenderer {
 
         if scene.drawsText, let layout = scene.layout { drawText(layout, in: context) }
 
+        for image in scene.images { draw(image, data: image.fileName.flatMap { scene.imageData[$0] }, in: context) }
+
         context.setLineCap(.round)
         context.setLineJoin(.round)
         for stroke in scene.strokes { draw(stroke, in: context) }
@@ -349,6 +459,28 @@ public enum PageRenderer {
                 break
             }
         }
+        context.restoreGState()
+    }
+
+    /// Draws an image through its transform, or a gray frame where an image is missing.
+    static func draw(_ image: PlacedImage, data: Data?, in context: CGContext) {
+        guard let data, let source = CGImageSourceCreateWithData(data as CFData, nil),
+            let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else {
+            context.saveGState()
+            context.setStrokeColor(CGColor(gray: 0.6, alpha: 1))
+            context.setLineWidth(3)
+            context.stroke(image.bounds)
+            context.restoreGState()
+            return
+        }
+        context.saveGState()
+        context.interpolationQuality = .high
+        context.concatenate(image.transform)
+        // Core Graphics draws an image's top row at the rectangle's maximum y; flip so that it lands at v = 0.
+        context.translateBy(x: 0, y: 1)
+        context.scaleBy(x: 1, y: -1)
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
         context.restoreGState()
     }
 

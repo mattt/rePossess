@@ -34,6 +34,9 @@ public struct PageContent: Sendable, Equatable {
     /// Typed text is not in the hash: a stroke group anchored to the text
     /// keeps its hash when the text moves it.
     public var strokeHash: String?
+    /// The file name of each image on the page, in the order of the scene tree,
+    /// or `nil` for an image whose file the page does not name.
+    public var images: [String?]
     /// Problems the reader skipped; see ``readPage(_:)``.
     public var warnings: [String]
 
@@ -42,12 +45,14 @@ public struct PageContent: Sendable, Equatable {
         highlights: [String] = [],
         strokeCount: Int = 0,
         strokeHash: String? = nil,
+        images: [String?] = [],
         warnings: [String] = []
     ) {
         self.paragraphs = paragraphs
         self.highlights = highlights
         self.strokeCount = strokeCount
         self.strokeHash = strokeHash
+        self.images = images
         self.warnings = warnings
     }
 
@@ -63,10 +68,30 @@ public struct PageContent: Sendable, Equatable {
     /// and checkboxes are task list items.
     /// Body paragraphs are separated by blank lines, list items are not,
     /// and empty paragraphs are dropped.
-    public var markdown: String {
+    public var markdown: String { markdown(inserting: []) }
+
+    /// The typed text as Markdown, with lines such as image placeholders inserted in reading order.
+    ///
+    /// - Parameter inserts: Each line and the number of paragraphs before it;
+    ///   a line goes after the paragraph with that index, or before the text for 0.
+    ///   Lines at the same position keep their order.
+    public func markdown(inserting inserts: [(afterParagraphs: Int, line: String)]) -> String {
         var out = ""
         var previousWasList = false
-        for paragraph in paragraphs {
+        func append(_ line: String) {
+            if !out.isEmpty { out += "\n\n" }
+            out += line
+            previousWasList = false
+        }
+        var pending = inserts.enumerated().sorted {
+            ($0.element.afterParagraphs, $0.offset) < ($1.element.afterParagraphs, $1.offset)
+        }
+        .map(\.element)
+        for (index, paragraph) in paragraphs.enumerated() {
+            while let next = pending.first, next.afterParagraphs <= index {
+                append(next.line)
+                pending.removeFirst()
+            }
             let text = paragraph.markdown.trimmingCharacters(in: .whitespaces)
             if text.isEmpty { continue }
             let (prefix, isList): (String, Bool) =
@@ -85,6 +110,7 @@ public struct PageContent: Sendable, Equatable {
             out += prefix + text
             previousWasList = isList
         }
+        for insert in pending { append(insert.line) }
         return out
     }
 
@@ -129,6 +155,8 @@ public func pageContent(_ result: PageReadResult) -> PageContent {
                 if !text.isEmpty { content.highlights.append(text) }
             case .group(let group):
                 hasher.add(group)
+            case .image(let image):
+                content.images.append(result.tree.imageFiles[image.key.value])
             }
         }
     } catch {

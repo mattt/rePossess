@@ -158,6 +158,39 @@ public final class Library: Sendable {
         if version < 1 { try migrateToVersion1() }
         if version < 2 { try migrateToVersion2() }
         if version < 3 { try migrateToVersion3() }
+        if version < 4 { try migrateToVersion4() }
+    }
+
+    /// The first-run fixes (2026-10-25): images on notebook pages, and search text without Markdown markers.
+    ///
+    /// Pages that were indexed before rePossess read block types 14 and 15 kept warnings about them,
+    /// so their documents are indexed again from the mirror's files, and gain an image placeholder.
+    /// Every other page's search text is written again without Markdown markers.
+    private func migrateToVersion4() throws {
+        let rows = try database.query("SELECT document_id, number, markdown FROM pages WHERE has_text = 1")
+        try database.transaction { t in
+            try t.query("DELETE FROM page_text WHERE kind = 'text'")
+            for row in rows {
+                guard let id = row[0].string, let number = row[1].int, let markdown = row[2].string else { continue }
+                try t.query(
+                    "INSERT INTO page_text (document_id, number, kind, body) VALUES (?, ?, 'text', ?)",
+                    [.text(id), SQLValue(number), .text(searchBody(markdown: markdown, page: number))]
+                )
+            }
+            try t.query("PRAGMA user_version = 4")
+        }
+        let stale = try database.query(
+            """
+            SELECT DISTINCT pages.document_id, items.source FROM pages JOIN items ON items.id = pages.document_id
+            WHERE pages.warnings LIKE '%Unknown block type 14%' OR pages.warnings LIKE '%Unknown block type 15%'
+            """
+        )
+        for row in stale {
+            guard let id = row[0].string, let source = row[1].string.flatMap(Source.init(rawValue:)),
+                let folder = try? folder(for: id), let document = try? indexDocument(folder)
+            else { continue }
+            try store(document, id: id, source: source, usbModified: nil, cloudHash: nil)
+        }
     }
 
     private func migrateToVersion1() throws {

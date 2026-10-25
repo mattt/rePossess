@@ -55,6 +55,9 @@ func blockReader(for blockType: Int) -> ((TaggedBlockReader) throws -> any Block
         SceneItemBlock.Kind.text.rawValue:
         SceneItemBlock.fromStream
     case RootTextBlock.blockType: RootTextBlock.fromStream
+    // rePossess's own: images, which rmscene 0.8.0 does not read (see PageImages.swift).
+    case ImageFilesBlock.blockType: ImageFilesBlock.fromStream
+    case SceneImageItemBlock.blockType: SceneImageItemBlock.fromStream
     default: nil
     }
 }
@@ -554,6 +557,20 @@ func addToTree(_ tree: SceneTree, _ b: any Block) throws {
             case .text, .tombstone:
                 break
             }
+        case let b as ImageFilesBlock:
+            for entry in b.entries { tree.imageFiles[entry.key] = entry.fileName.value }
+        case let b as SceneImageItemBlock:
+            let item = b.item
+            try tree.addItem(
+                CrdtSequenceItem(
+                    item.itemId,
+                    item.leftId,
+                    item.rightId,
+                    item.deletedLength,
+                    item.value.map(SceneItem.image)
+                ),
+                parentId: b.parentId
+            )
         case let b as SceneInfo:
             tree.sceneInfo = b
         case let b as RootTextBlock:

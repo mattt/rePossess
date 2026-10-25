@@ -210,7 +210,8 @@ extension RePossessTools {
     static func pageBody(_ page: LibraryPage, _ handwriting: PageHandwriting = .notShown, documentID: String) -> String
     {
         var parts: [String] = []
-        if page.hasText { parts.append(page.markdown) }
+        // The Markdown holds typed text and PDF text, and a placeholder for each image in reading order.
+        if !page.markdown.isEmpty { parts.append(page.markdown) }
         if let part = handwritingPart(page, handwriting, documentID: documentID) { parts.append(part) }
         if !page.warnings.isEmpty {
             parts.append("[Part of this page could not be read; fetch_page_image shows what rePossess could draw.]")

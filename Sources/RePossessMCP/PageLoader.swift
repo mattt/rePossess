@@ -49,7 +49,7 @@ public struct PageLoader: Sendable {
         {
             pdfPage = pdf.page(at: index + 1)
         }
-        return PageScene(pageBytes: bytes ?? nil, pdfPage: pdfPage)
+        return PageScene(pageBytes: bytes ?? nil, pdfPage: pdfPage) { folder.imageData(page: page.pageID, file: $0) }
     }
 
     /// The page, ready to draw, from the tablet's PDF export when it is current,

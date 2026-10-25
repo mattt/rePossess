@@ -9,6 +9,8 @@ public enum SceneItem {
     case group(Group)
     case line(Line)
     case glyphRange(GlyphRange)
+    /// An image, which rePossess reads and rmscene 0.8.0 does not (see PageImages.swift).
+    case image(ImageItem)
 }
 
 /// A group of nested items. Groups represent layers.
@@ -271,6 +273,8 @@ public final class SceneTree {
     private var nodeIds: [CrdtId: Group]
     public var sceneInfo: SceneInfo?
     public var rootText: Text?
+    /// The file name of each image, by key, from block type 14.
+    public var imageFiles: [ImageKey: String] = [:]
 
     public init() { nodeIds = [rootId: root] }
 

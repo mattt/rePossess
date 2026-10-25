@@ -130,6 +130,6 @@ import Testing
         let reopened = try Library(root: root)
         #expect(try reopened.pages(of: Shelf.handwritten)[0].strokeHash == hash)
         #expect(try reopened.search("lighthouse").hits.map(\.match) == [.text])
-        #expect(try reopened.database.query("PRAGMA user_version").first?.first?.int == 3)
+        #expect(try reopened.database.query("PRAGMA user_version").first?.first?.int == 4)
     }
 }

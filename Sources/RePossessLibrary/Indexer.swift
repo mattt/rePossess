@@ -1,6 +1,7 @@
 import Foundation
 import PDFKit
 import RePossessFormat
+import RePossessRender
 
 /// A document's index records, read from its files.
 struct IndexedDocument {
@@ -25,7 +26,7 @@ struct IndexedDocument {
     /// The first 160 characters of the first page with text, on one line.
     var summary: String {
         guard let page = pages.first(where: \.hasText) else { return "" }
-        let words = page.markdown.split(whereSeparator: \.isWhitespace).map { word in
+        let words = searchBody(page).split(whereSeparator: \.isWhitespace).map { word in
             word.trimmingCharacters(in: CharacterSet(charactersIn: "#*-[]>|"))
         }
         let text = words.filter { !$0.isEmpty }.joined(separator: " ")
@@ -53,10 +54,15 @@ func indexDocument(_ folder: DocumentFolder) throws -> IndexedDocument {
     for reference in content.pages {
         var warnings: [String] = []
         var page = PageContent()
+        var imagePositions: [Int] = []
         do {
             if let bytes = try folder.pageBytes(reference.id) {
                 page = pageContent(bytes)
                 warnings += page.warnings
+                if !page.images.isEmpty {
+                    // Where each image falls among the paragraphs, from rePossess's layout of the text.
+                    imagePositions = PageScene(pageBytes: bytes).imageReadingPositions
+                }
             }
         } catch {
             warnings.append("The page file could not be read: \(error)")
@@ -76,12 +82,15 @@ func indexDocument(_ folder: DocumentFolder) throws -> IndexedDocument {
         typedText = typedText || page.hasText
         var parts: [String] = []
         if !pdfText.isEmpty { parts.append(pdfText) }
-        if page.hasText { parts.append(page.markdown) }
+        let placeholder = imagePlaceholder(page: reference.number)
+        if page.hasText || !imagePositions.isEmpty {
+            parts.append(page.markdown(inserting: imagePositions.map { ($0, placeholder) }))
+        }
         if !page.highlights.isEmpty {
             parts.append("Highlighted on this page:\n" + page.highlights.map { "- \($0)" }.joined(separator: "\n"))
         }
         let markdown = parts.joined(separator: "\n\n")
-        let hasText = !markdown.isEmpty
+        let hasText = !pdfText.isEmpty || page.hasText || !page.highlights.isEmpty
         pages.append(
             LibraryPage(
                 documentID: folder.id,
@@ -90,7 +99,7 @@ func indexDocument(_ folder: DocumentFolder) throws -> IndexedDocument {
                 sourcePageIndex: reference.sourcePageIndex,
                 markdown: markdown,
                 hasText: hasText,
-                needsImage: page.hasInk || (isPDFPage && pdfText.isEmpty),
+                needsImage: page.hasInk || (isPDFPage && pdfText.isEmpty) || (!imagePositions.isEmpty && !hasText),
                 strokeCount: page.strokeCount,
                 warnings: warnings,
                 strokeHash: page.strokeHash
@@ -108,9 +117,41 @@ func indexDocument(_ folder: DocumentFolder) throws -> IndexedDocument {
     )
 }
 
-/// The search text of a page: its Markdown without the Markdown markers.
+/// The line that stands for an image in a page's Markdown, in reading order.
+/// The image itself, such as a table that reMarkdown drew, is only in the page image.
+func imagePlaceholder(page: Int) -> String {
+    "[Image: see fetch_page_image for page \(page).]"
+}
+
+/// The search text of a page: its Markdown without the Markdown markers and the image placeholders,
+/// so that search snippets show the words alone. `fetch_document` keeps the Markdown.
 func searchBody(_ page: LibraryPage) -> String {
-    page.markdown
+    searchBody(markdown: page.markdown, page: page.number)
+}
+
+func searchBody(markdown: String, page: Int) -> String {
+    let placeholder = imagePlaceholder(page: page)
+    var lines: [String] = []
+    for line in markdown.split(separator: "\n", omittingEmptySubsequences: false) {
+        var text = Substring(line)
+        if text == Substring(placeholder) { continue }
+        // Leading spaces, then heading, list, and task markers.
+        text = text.drop { $0 == " " }
+        if let hashes = text.firstIndex(where: { $0 != "#" }), hashes != text.startIndex,
+            text[hashes] == " "
+        {
+            text = text[text.index(after: hashes)...]
+        }
+        for marker in ["- [ ] ", "- [x] ", "- "] where text.hasPrefix(marker) {
+            text = text.dropFirst(marker.count)
+            break
+        }
+        // Emphasis markers: runs of asterisks.
+        let plain = String(text).replacingOccurrences(of: "*", with: "").trimmingCharacters(in: .whitespaces)
+        if !plain.isEmpty { lines.append(plain) }
+    }
+    // One line for each paragraph or item, without blank lines, so that a snippet has single spaces.
+    return lines.joined(separator: "\n")
 }
 
 extension Library {

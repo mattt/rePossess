@@ -155,6 +155,8 @@ extension RePossessTools {
                 + "not recognized as text yet. Call recognize_pages with id \(documentID) and pages "
                 + "{\"start\": \(n), \"end\": \(n)} to read it as text, or fetch_page_image with page_no \(n) to see it.]"
         case .notShown:
+            // A notebook page with images and no text or ink: its placeholders name fetch_page_image.
+            if !ink, page.sourcePageIndex == nil { return nil }
             if page.needsImage, !page.hasText {
                 return ink
                     ? "[Handwriting or a drawing without text. Call fetch_page_image with page_no \(n) to see it.]"

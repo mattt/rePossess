@@ -238,4 +238,15 @@ public struct DocumentFolder: Sendable {
 
     /// Whether the document has a PDF.
     public var hasPDF: Bool { FileManager.default.fileExists(atPath: pdfURL.path) }
+
+    /// The bytes of an image on a page, in `<id>/<page-id>/<file>`, or `nil` when the file is missing
+    /// or its name is not a plain file name, as the page names it in block type 14.
+    public func imageData(page pageId: String, file name: String) -> Data? {
+        guard isValidItemID(pageId), !name.isEmpty, name.count <= 128, !name.hasPrefix("."),
+            name.unicodeScalars.allSatisfy({
+                CharacterSet.alphanumerics.contains($0) || "-_.".unicodeScalars.contains($0)
+            })
+        else { return nil }
+        return try? Data(contentsOf: file("\(id)/\(pageId)/\(name)"))
+    }
 }

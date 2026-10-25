@@ -494,3 +494,52 @@ actor Waits {
         #expect(try library.search("lighthouse", tag: "garden").total == 1)
     }
 }
+
+@Suite struct ImageIndexTests {
+    /// A library indexed before rePossess read images keeps the old warnings and Markdown search text;
+    /// opening it reindexes those documents from the mirror and writes the search text without markers.
+    @Test func migrationReindexesPagesWithImagesAndPlainSearchText() async throws {
+        var page = PageBuilder()
+        page.paragraphs = [StyledParagraph(.heading, "Invented heading"), StyledParagraph(.plain, "Then a table:")]
+        page.images = [.init(fileName: "t.png", x: -400, y: 600, width: 800, height: 300)]
+        let id = "d0000000-0000-4000-8000-0000000000a1"
+        let document = DocumentBuilder(id: id, name: "With an image", pages: [("p-1", page)])
+        let tablet = FakeTablet()
+        await tablet.add(
+            USBItem(
+                id: id,
+                type: "DocumentType",
+                fileType: "notebook",
+                modifiedClient: "2026-10-25T07:00:00.000Z",
+                visibleName: document.name
+            ),
+            rmdoc: try document.rmdoc()
+        )
+        let library = try temporaryLibrary()
+        _ = try await library.refreshUSB(client: USBClient(transport: tablet, checkInterface: { true }), exports: false)
+        #expect(try library.pages(of: id)[0].markdown.hasSuffix("[Image: see fetch_page_image for page 1.]"))
+
+        // As phase 5 left it: a warning for the image blocks, Markdown in the search text, and version 3.
+        _ = try library.database.query(
+            #"UPDATE pages SET warnings = '["Block type 14 at byte 296: Unknown block type 14. Skipping 192 bytes."]', markdown = '# Invented heading\n\nThen a table:'"#
+        )
+        _ = try library.database.query(
+            "UPDATE page_text SET body = '# Invented heading' || char(10) || char(10) || 'Then a table:'"
+        )
+        _ = try library.database.query("PRAGMA user_version = 3")
+
+        let reopened = try Library(root: library.root)
+        let pages = try reopened.pages(of: id)
+        #expect(pages[0].warnings.isEmpty)
+        #expect(pages[0].markdown == "# Invented heading\n\nThen a table:\n\n[Image: see fetch_page_image for page 1.]")
+        let hit = try #require(try reopened.search("invented").hits.first { $0.match == .text })
+        #expect(hit.snippet == "Invented heading Then a table:")
+        #expect(try reopened.database.query("PRAGMA user_version").first?.first?.int == 4)
+    }
+
+    @Test func searchTextDropsMarkers() {
+        let markdown =
+            "# Title\n\n## Sub\n\n- one **bold**\n  - two\n- [ ] task\n- [x] done\n\n[Image: see fetch_page_image for page 3.]"
+        #expect(searchBody(markdown: markdown, page: 3) == "Title\nSub\none bold\ntwo\ntask\ndone")
+    }
+}

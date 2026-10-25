@@ -119,6 +119,8 @@ public struct TextLayout {
     public var lines: [TextLine] = []
     /// The baseline of the line that holds each character, by character ID.
     public var baselines: [CrdtId: CGFloat] = [:]
+    /// The baseline of each paragraph's last line, in the order of the text's paragraphs.
+    public var paragraphBottoms: [CGFloat] = []
     /// The top of the text block and the bottom of its last line, in page pixels.
     public var top: CGFloat = 0
     public var bottom: CGFloat = 0
@@ -184,6 +186,7 @@ public struct TextLayout {
                 }
             }
             lastBaseline = baseline
+            paragraphBottoms.append(baseline)
             previous = metrics
         }
         bottom = lastBaseline + (previous?.descent ?? 0)

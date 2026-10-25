@@ -34,7 +34,7 @@ let package = Package(
         .target(name: "RePossessUSB"),
         .target(
             name: "RePossessLibrary",
-            dependencies: ["RePossessFormat", "RePossessCloud", "RePossessUSB"],
+            dependencies: ["RePossessFormat", "RePossessCloud", "RePossessUSB", "RePossessRender"],
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .target(
