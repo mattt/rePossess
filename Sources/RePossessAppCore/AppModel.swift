@@ -46,6 +46,8 @@ public final class AppModel {
     private var loop: Task<Void, Never>?
     /// The tablet's USB network appeared while another refresh ran; refresh over USB when it ends.
     private var usbWaiting = false
+    /// A refresh that found the library's lock held by another process, and when to try it again.
+    private var retry: (trigger: RefreshTrigger, at: Date)?
     private var download: Task<Void, Never>?
 
     /// The model download's progress from 0 to 1, while it runs or after it stops.
@@ -179,7 +181,13 @@ public final class AppModel {
             return
         }
         updateSnapshot()
-        guard scheduled, !refreshing, let next = nextRefresh, next <= Date() else { return }
+        guard scheduled, !refreshing else { return }
+        if let retry, retry.at <= Date() {
+            self.retry = nil
+            refresh(retry.trigger)
+            return
+        }
+        guard let next = nextRefresh, next <= Date() else { return }
         refresh(.schedule)
     }
 
@@ -200,6 +208,11 @@ public final class AppModel {
             lastOutcome = outcome
             lastAttempt = outcome.ended
             failures = outcome.isFailure ? failures + 1 : 0
+        }
+        // `repossess` in another process was refreshing; try once more in a minute,
+        // so that a tablet that connects during a client's refresh is still read over USB.
+        if outcome.result == .busyElsewhere, outcome.trigger != .schedule {
+            retry = (outcome.trigger, outcome.ended.addingTimeInterval(60))
         }
         Log.refresh.notice("\(outcome.trigger.rawValue, privacy: .public): \(outcome.summary)")
         updateSnapshot()
