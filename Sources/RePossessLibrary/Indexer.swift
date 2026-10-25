@@ -92,7 +92,8 @@ func indexDocument(_ folder: DocumentFolder) throws -> IndexedDocument {
                 hasText: hasText,
                 needsImage: page.hasInk || (isPDFPage && pdfText.isEmpty),
                 strokeCount: page.strokeCount,
-                warnings: warnings
+                warnings: warnings,
+                strokeHash: page.strokeHash
             )
         )
         if let tags = content.pageTags[reference.id] { pageTags[reference.number] = tags }
@@ -156,23 +157,25 @@ extension Library {
                 try t.query(
                     """
                     INSERT INTO pages (document_id, number, page_id, source_page, markdown, has_text, needs_image,
-                                       stroke_count, tags, warnings)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       stroke_count, tags, warnings, stroke_hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         .text(id), SQLValue(page.number), .text(page.pageID), SQLValue(page.sourcePageIndex),
                         .text(page.markdown), SQLValue(page.hasText), SQLValue(page.needsImage),
                         SQLValue(page.strokeCount), .text(encodeJSON(document.pageTags[page.number] ?? [])),
-                        .text(encodeJSON(page.warnings)),
+                        .text(encodeJSON(page.warnings)), SQLValue(page.strokeHash),
                     ]
                 )
                 if page.hasText {
                     try t.query(
-                        "INSERT INTO page_text (document_id, number, body) VALUES (?, ?, ?)",
+                        "INSERT INTO page_text (document_id, number, kind, body) VALUES (?, ?, 'text', ?)",
                         [.text(id), SQLValue(page.number), .text(searchBody(page))]
                     )
                 }
             }
+            // Handwriting that the active recognizer already read, such as on a page whose strokes did not change.
+            try Self.indexHandwriting(t, documentID: id)
         }
     }
 

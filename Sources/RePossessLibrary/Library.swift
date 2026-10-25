@@ -80,11 +80,15 @@ public struct LibraryPage: Sendable, Equatable {
     public var strokeCount: Int
     /// Problems the reader skipped on this page.
     public var warnings: [String]
+    /// The hash of the page's strokes, under which recognized handwriting is cached,
+    /// or `nil` for a page without strokes. See ``PageContent/strokeHash``.
+    public var strokeHash: String? = nil
 }
 
 /// One match from ``Library/search(_:limit:tag:)``.
 public struct SearchHit: Sendable, Equatable {
-    public enum Match: String, Sendable { case name, tag, text }
+    /// What matched: the name, a tag, typed or PDF text, or recognized handwriting.
+    public enum Match: String, Sendable { case name, tag, text, handwriting }
 
     public var item: LibraryItem
     public var match: Match
@@ -153,6 +157,7 @@ public final class Library: Sendable {
         let version = try database.query("PRAGMA user_version").first?.first?.int ?? 0
         if version < 1 { try migrateToVersion1() }
         if version < 2 { try migrateToVersion2() }
+        if version < 3 { try migrateToVersion3() }
     }
 
     private func migrateToVersion1() throws {
@@ -324,7 +329,8 @@ public final class Library: Sendable {
     public func pages(of id: String) throws -> [LibraryPage] {
         try database.query(
             """
-            SELECT document_id, number, page_id, source_page, markdown, has_text, needs_image, stroke_count, warnings
+            SELECT document_id, number, page_id, source_page, markdown, has_text, needs_image, stroke_count, warnings,
+                   stroke_hash
             FROM pages WHERE document_id = ? ORDER BY number
             """,
             [.text(id)]
@@ -338,16 +344,19 @@ public final class Library: Sendable {
                 hasText: row[5].int == 1,
                 needsImage: row[6].int == 1,
                 strokeCount: row[7].int ?? 0,
-                warnings: decodeJSON(row[8].string) ?? []
+                warnings: decodeJSON(row[8].string) ?? [],
+                strokeHash: row[9].string
             )
         }
     }
 
-    /// Searches names, tags, and page text.
+    /// Searches names, tags, page text, and recognized handwriting.
     ///
     /// Names and tags match a case-insensitive substring.
     /// Page text uses FTS5: every word of the query must appear, each as a word or the start of one,
-    /// ignoring case and accents. Text results are ordered by FTS5's rank.
+    /// ignoring case and accents. Text results are ordered by FTS5's rank,
+    /// with one result for each page: typed text and recognized handwriting are separate rows,
+    /// and the better-ranked one stands for the page.
     /// - Returns: The first `limit` hits and the total number of hits.
     public func search(_ query: String, limit: Int = 50, tag: String? = nil) throws -> (hits: [SearchHit], total: Int) {
         let documents = try documents().filter { hasTag($0, tag) }
@@ -369,15 +378,18 @@ public final class Library: Sendable {
             let match = words.map { "\"\($0)\"*" }.joined(separator: " ")
             let rows = try database.query(
                 """
-                SELECT document_id, number, snippet(page_text, 2, '', '', '…', 16)
+                SELECT document_id, number, snippet(page_text, 3, '', '', '…', 16), kind
                 FROM page_text WHERE page_text MATCH ? ORDER BY rank
                 """,
                 [.text(match)]
             )
+            var seen: Set<String> = []
             for row in rows {
                 guard let document = byID[row[0].string ?? ""] else { continue }
+                guard seen.insert("\(document.id)/\(row[1].int ?? 0)").inserted else { continue }
                 let snippet = (row[2].string ?? "").replacingOccurrences(of: "\n", with: " ")
-                hits.append(SearchHit(item: document, match: .text, pageNo: row[1].int, snippet: snippet))
+                let kind: SearchHit.Match = row[3].string == "handwriting" ? .handwriting : .text
+                hits.append(SearchHit(item: document, match: kind, pageNo: row[1].int, snippet: snippet))
             }
         }
         return (Array(hits.prefix(max(limit, 0))), hits.count)
