@@ -30,7 +30,7 @@ public struct CloudAuth: Sendable {
 
 /// Reads the sync store with a user token.
 ///
-/// Phase 1 reads only: the root, indexes, and files.
+/// It reads only: the root, indexes, and files.
 /// Nothing here writes to the account.
 public struct CloudClient: Sendable {
     let transport: any HTTPTransport
@@ -89,8 +89,12 @@ public struct CloudClient: Sendable {
 }
 
 /// Holds the device token's source and renews the user token when it nears its expiry.
+///
+/// Every request goes through one ``PacedTransport``,
+/// so a session has at most ``Pacing/maxConcurrent`` requests in flight
+/// and honors the server's rate limits across all of its clients.
 public actor CloudSession {
-    private let transport: any HTTPTransport
+    private let transport: PacedTransport
     private let deviceToken: @Sendable () throws -> String
     private let syncHost: URL?
     private let tokenTimeout: Duration?
@@ -98,21 +102,29 @@ public actor CloudSession {
     private var expiry: Date?
 
     /// - Parameters:
+    ///   - transport: Sends the requests; the session paces them.
     ///   - deviceToken: Reads the device token, such as ``DeviceTokenKeychain/read()``.
     ///   - syncHost: Overrides the sync host that the user token names.
     ///   - tokenTimeout: How long to wait for the device token, or `nil` to wait as long as it takes.
     ///     macOS can hold the Keychain read until the user answers a permission dialog;
     ///     a server that no one watches should not wait forever.
+    ///   - pacing: The concurrency, retries, and waits of the requests.
     public init(
         transport: any HTTPTransport = URLSessionTransport(),
         deviceToken: @escaping @Sendable () throws -> String = DeviceTokenKeychain.read,
         syncHost: URL? = nil,
-        tokenTimeout: Duration? = nil
+        tokenTimeout: Duration? = nil,
+        pacing: Pacing = Pacing()
     ) {
-        self.transport = transport
+        self.transport = PacedTransport(base: transport, pacing: pacing)
         self.deviceToken = deviceToken
         self.syncHost = syncHost
         self.tokenTimeout = tokenTimeout
+    }
+
+    /// The requests and bytes that the session has sent and received.
+    public func usage() async -> TransportUsage {
+        await transport.usage
     }
 
     /// Reads the device token on another thread, and gives up after `tokenTimeout`.

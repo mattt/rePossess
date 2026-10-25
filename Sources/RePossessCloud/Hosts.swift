@@ -11,6 +11,9 @@ public enum CloudHosts {
     /// The sync host that rmapi-js uses by default.
     public static let defaultSync = URL(string: "https://eu.tectonic.remarkable.com")!
 
+    /// The page that gives a one-time code for a desktop app (rmapi-js `README.md`).
+    public static let connectPage = URL(string: "https://my.remarkable.com/device/desktop/connect")!
+
     /// The sync host that ddvk/rmapi and remarkable-mcp use.
     public static let legacySync = URL(string: "https://internal.cloud.remarkable.com")!
 

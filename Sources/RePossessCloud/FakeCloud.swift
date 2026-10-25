@@ -6,7 +6,8 @@ import Foundation
 /// It enforces the behavior that clients reported in 2026:
 /// `rm-filename` on every file request (remarkable-mcp issue 101, from 2026-05-18),
 /// and a bearer token on every request.
-/// It answers only the read requests; any other request gets 405.
+/// It answers device registration and the read requests; any other request gets 405.
+/// It can add rate-limit headers, wait before it answers, and fail file reads on purpose.
 actor FakeCloud: HTTPTransport {
     struct Blob {
         var name: String
@@ -21,6 +22,20 @@ actor FakeCloud: HTTPTransport {
     var generation: Int64 = 1_777_000_000_000_000
     var schemaVersion = 3
     private(set) var requests: [HTTPRequest] = []
+
+    /// The one-time code that registration accepts.
+    static let oneTimeCode = "abcd2345"
+    /// Headers added to every response, such as `x-ratelimit-remaining`.
+    var extraHeaders: [String: String] = [:]
+    /// How long each request takes.
+    var latency: Duration = .zero
+    /// Statuses to answer the next file reads with, one each, before serving them.
+    var fileFailures: [Int] = []
+    private var inFlight = 0
+    /// The most requests that were in flight at once.
+    private(set) var maxInFlight = 0
+    /// The bytes in every response body so far.
+    private(set) var bytesServed = 0
 
     init() {}
 
@@ -40,7 +55,17 @@ actor FakeCloud: HTTPTransport {
         blobs[hash ?? ContentHash.sha256Hex(data)] = Blob(name: name, data: data)
     }
 
-    func clearRequests() { requests = [] }
+    func clearRequests() {
+        requests = []
+        maxInFlight = 0
+        bytesServed = 0
+    }
+
+    func set(extraHeaders: [String: String] = [:], latency: Duration = .zero, fileFailures: [Int] = []) {
+        self.extraHeaders = extraHeaders
+        self.latency = latency
+        self.fileFailures = fileFailures
+    }
 
     /// Seeds a document's files and its index, and returns its root entry.
     func seedDocument(id: String, files: [(String, Data)], schema: SchemaVersion = .v3) throws -> IndexEntry {
@@ -76,8 +101,31 @@ actor FakeCloud: HTTPTransport {
     func send(_ request: HTTPRequest) async throws -> HTTPResponse {
         requests.append(request)
         guard CloudHosts.isAllowed(request.url) else { throw CloudError.hostNotAllowed(request.url.host() ?? "") }
+        inFlight += 1
+        maxInFlight = max(maxInFlight, inFlight)
+        defer { inFlight -= 1 }
+        if latency > .zero { try await Task.sleep(for: latency) }
+        var response = answer(request)
+        response.headers.merge(extraHeaders) { current, _ in current }
+        bytesServed += response.body.count
+        return response
+    }
+
+    private func answer(_ request: HTTPRequest) -> HTTPResponse {
         let path = request.url.path()
         let bearer = request.headers["authorization"]
+        if request.method == "POST", path == "/token/json/2/device/new" {
+            guard bearer == "Bearer", request.headers["content-type"] == "application/json",
+                let body = request.body,
+                let object = try? JSONSerialization.jsonObject(with: body) as? [String: String],
+                object["deviceDesc"] == "desktop-macos",
+                let deviceID = object["deviceID"], UUID(uuidString: deviceID) != nil, deviceID == deviceID.lowercased()
+            else { return HTTPResponse(status: 400, body: Data("bad registration".utf8)) }
+            guard object["code"] == Self.oneTimeCode else {
+                return HTTPResponse(status: 400, body: Data("invalid one-time code".utf8))
+            }
+            return HTTPResponse(status: 200, body: Data(Self.deviceToken.utf8))
+        }
         if request.method == "POST", path == "/token/json/2/user/new" {
             guard bearer == "Bearer \(Self.deviceToken)" else { return HTTPResponse(status: 401) }
             return HTTPResponse(status: 200, body: Data(Self.userToken.utf8))
@@ -89,6 +137,7 @@ actor FakeCloud: HTTPTransport {
             return HTTPResponse(status: 200, body: Data(body.utf8))
         }
         if path.hasPrefix("/sync/v3/files/") {
+            if !fileFailures.isEmpty { return HTTPResponse(status: fileFailures.removeFirst()) }
             let hash = String(path.dropFirst("/sync/v3/files/".count))
             guard let name = request.headers["rm-filename"], !name.isEmpty else {
                 return HTTPResponse(status: 400, body: Data(#"{"message":"missing rm-filename"}"#.utf8))

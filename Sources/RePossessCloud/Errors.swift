@@ -27,6 +27,12 @@ public enum CloudError: Error, Equatable, CustomStringConvertible {
     /// The Keychain did not give the device token in time, most likely because macOS
     /// is waiting for the user to allow the read.
     case keychainTimedOut
+    /// A one-time code did not have eight letters or digits.
+    case invalidCode
+    /// A device token is already stored, so pairing again would add a second device.
+    case alreadyPaired(service: String)
+    /// The server refused to register the device.
+    case registrationRefused(status: Int, message: String)
 
     public var description: String {
         switch self {
@@ -41,11 +47,19 @@ public enum CloudError: Error, Equatable, CustomStringConvertible {
         case .hashMismatch(let expected, let actual): "hash mismatch: expected \(expected), got \(actual)"
         case .malformedToken: "the token is not a JWT"
         case .notPaired(let service):
-            "no device token in the login keychain under the service \"\(service)\"; pair rePossess first"
+            "no device token in the login keychain under the service \"\(service)\"; run `repossess pair` first"
         case .keychain(let status, let message): "Keychain error \(status): \(message)"
         case .keychainTimedOut:
             "macOS did not give rePossess the device token in time; it may be asking for permission. "
-                + "Run `repossess refresh --cloud` in Terminal and choose Always Allow, then try again."
+                + "Run `repossess check-token` in Terminal and choose Always Allow, then try again."
+        case .invalidCode:
+            "a one-time code has eight letters or digits; get one from \(CloudHosts.connectPage.absoluteString)"
+        case .alreadyPaired(let service):
+            "rePossess is already paired: the login keychain has a device token under \"\(service)\". "
+                + "Run `repossess unpair` first to pair again."
+        case .registrationRefused(let status, let message):
+            "reMarkable refused the one-time code (HTTP \(status): \(message)). "
+                + "Get a new code from \(CloudHosts.connectPage.absoluteString) and try again."
         }
     }
 

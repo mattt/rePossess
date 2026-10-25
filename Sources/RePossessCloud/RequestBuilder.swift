@@ -16,10 +16,10 @@ public struct RootState: Sendable, Equatable, Codable {
     }
 }
 
-/// Builds the read requests of the sync protocol as plain values.
+/// Builds the requests of the sync protocol as plain values.
 ///
-/// Phase 1 reads only: it renews the user token, reads the root, and downloads blobs.
-/// Pairing and the write requests of spike 6 come back in phases 2 and 3.
+/// Phase 2 registers the device, renews the user token, reads the root, and downloads blobs.
+/// The write requests of spike 6 come back in phase 3.
 /// Each method cites the rmapi-js line it follows (commit 824f0ad).
 public struct RequestBuilder: Sendable {
     /// The host for tokens.
@@ -30,6 +30,31 @@ public struct RequestBuilder: Sendable {
     public init(authHost: URL = CloudHosts.auth, syncHost: URL = CloudHosts.defaultSync) {
         self.authHost = authHost
         self.syncHost = syncHost
+    }
+
+    /// The device description that rePossess registers as.
+    public static let deviceDescription = "desktop-macos"
+
+    /// Registers a new device with a one-time code; the response body is the device token.
+    ///
+    /// rmapi-js `src/index.ts` lines 413-442: `POST /token/json/2/device/new`
+    /// with an empty bearer and a JSON body of `code`, `deviceDesc`, and `deviceID`.
+    /// The `Content-Type` came with rmapi-js commit 39b1daf (2026-09-15).
+    public func registerDevice(code: String, deviceID: UUID) throws -> HTTPRequest {
+        guard code.count == 8, code.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else {
+            throw CloudError.invalidCode
+        }
+        let body = [
+            "code": code,
+            "deviceDesc": Self.deviceDescription,
+            "deviceID": deviceID.uuidString.lowercased(),
+        ]
+        return HTTPRequest(
+            method: "POST",
+            url: authHost.appending(path: "token/json/2/device/new"),
+            headers: ["Authorization": "Bearer", "Content-Type": "application/json"],
+            body: try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        )
     }
 
     /// Exchanges the device token for a user token; the response body is the user token.

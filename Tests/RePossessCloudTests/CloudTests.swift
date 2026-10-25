@@ -160,8 +160,231 @@ enum Fixtures {
         #expect(!request.redactedDescription.contains("secret"))
     }
 
-    @Test func keychainServiceIsNamedInOnePlace() {
-        #expect(DeviceTokenKeychain.service == "rePossess spike 6")
+    @Test func registrationRequest() throws {
+        let id = UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
+        let request = try builder.registerDevice(code: "abcd2345", deviceID: id)
+        #expect(request.method == "POST")
+        #expect(
+            request.url.absoluteString == "https://webapp-prod.cloud.remarkable.engineering/token/json/2/device/new"
+        )
+        #expect(request.headers == ["authorization": "Bearer", "content-type": "application/json"])
+        let body = try JSONSerialization.jsonObject(with: try #require(request.body)) as? [String: String]
+        #expect(body == ["code": "abcd2345", "deviceDesc": "desktop-macos", "deviceID": id.uuidString.lowercased()])
+        for code in ["abcd234", "abcd23456", "abcd 234", "abcd234é", ""] {
+            #expect(throws: CloudError.invalidCode) { try builder.registerDevice(code: code, deviceID: id) }
+        }
+    }
+
+    @Test func keychainItemsAreNamedInOnePlace() {
+        #expect(DeviceTokenKeychain.services == ["rePossess", "rePossess spike 6"])
+        #expect(DeviceTokenKeychain.service == "rePossess")
+    }
+}
+
+@Suite struct KeychainTests {
+    @Test func readsThePairedItemFirstAndFallsBackToSpike6() throws {
+        let both = FakeKeychain(["rePossess": "new.device.token", "rePossess spike 6": "old.device.token"])
+        #expect(try DeviceTokenKeychain.read(from: both) == ("new.device.token", "rePossess"))
+        #expect(both.reads == ["rePossess"])
+
+        let spike = FakeKeychain(["rePossess spike 6": "old.device.token"])
+        #expect(try DeviceTokenKeychain.read(from: spike) == ("old.device.token", "rePossess spike 6"))
+        #expect(spike.reads == ["rePossess", "rePossess spike 6"])
+
+        #expect(throws: CloudError.notPaired(service: "rePossess")) {
+            try DeviceTokenKeychain.read(from: FakeKeychain())
+        }
+    }
+
+    @Test func findsThePairedItemWithoutReadingASecret() {
+        let spike = FakeKeychain(["rePossess spike 6": "old.device.token"])
+        #expect(DeviceTokenKeychain.pairedService(in: spike) == "rePossess spike 6")
+        #expect(DeviceTokenKeychain.pairedService(in: FakeKeychain()) == nil)
+        #expect(spike.reads.isEmpty)
+    }
+}
+
+@Suite struct PairingTests {
+    @Test func pairsAsADesktopMacAndStoresTheToken() async throws {
+        let cloud = FakeCloud()
+        let keychain = FakeKeychain()
+        let id = UUID(uuidString: "55555555-5555-4555-8555-555555555555")!
+        let result = try await Pairing(transport: cloud, store: keychain).pair(code: "  abcd2345\n", deviceID: id)
+        #expect(result == Pairing.Result(service: "rePossess", deviceID: id.uuidString.lowercased(), olderService: nil))
+        #expect(keychain.contents == ["rePossess": FakeCloud.deviceToken])
+        let requests = await cloud.requests
+        #expect(requests.map { $0.url.path() } == ["/token/json/2/device/new"])
+        // The new token works for the read path.
+        let session = CloudSession(
+            transport: cloud,
+            deviceToken: { try DeviceTokenKeychain.read(from: keychain).token }
+        )
+        _ = try await session.client()
+    }
+
+    @Test func reportsAnOlderItemThatStays() async throws {
+        let keychain = FakeKeychain(["rePossess spike 6": "old.device.token"])
+        let result = try await Pairing(transport: FakeCloud(), store: keychain).pair(code: FakeCloud.oneTimeCode)
+        #expect(result.olderService == "rePossess spike 6")
+        #expect(try DeviceTokenKeychain.read(from: keychain).service == "rePossess")
+    }
+
+    @Test func refusesBeforeAnyRequest() async throws {
+        let cloud = FakeCloud()
+        let empty = FakeKeychain()
+        await #expect(throws: CloudError.invalidCode) {
+            try await Pairing(transport: cloud, store: empty).pair(code: "abc")
+        }
+        let paired = FakeKeychain(["rePossess": "new.device.token"])
+        await #expect(throws: CloudError.alreadyPaired(service: "rePossess")) {
+            try await Pairing(transport: cloud, store: paired).pair(code: FakeCloud.oneTimeCode)
+        }
+        #expect(await cloud.requests.isEmpty)
+        #expect(paired.contents == ["rePossess": "new.device.token"] && empty.contents.isEmpty)
+    }
+
+    @Test func aRefusedCodeStoresNothing() async throws {
+        let keychain = FakeKeychain()
+        await #expect(throws: CloudError.registrationRefused(status: 400, message: "invalid one-time code")) {
+            try await Pairing(transport: FakeCloud(), store: keychain).pair(code: "zzzz9999")
+        }
+        #expect(keychain.contents.isEmpty)
+        #expect(
+            CloudError.registrationRefused(status: 400, message: "x").description
+                .contains("my.remarkable.com/device/desktop/connect")
+        )
+    }
+
+    @Test func unpairDeletesEveryItemAndSendsNothing() async throws {
+        let cloud = FakeCloud()
+        let keychain = FakeKeychain(["rePossess": "new.device.token", "rePossess spike 6": "old.device.token"])
+        let pairing = Pairing(transport: cloud, store: keychain)
+        let deleted = try pairing.unpair()
+        #expect(deleted == ["rePossess", "rePossess spike 6"])
+        #expect(keychain.contents.isEmpty && keychain.reads.isEmpty)
+        #expect(await cloud.requests.isEmpty)
+        let message = Pairing.unpairMessage(deleted: deleted)
+        #expect(message.contains("\"rePossess\" and \"rePossess spike 6\"") && message.contains("my.remarkable.com"))
+        #expect(try pairing.unpair().isEmpty)
+        #expect(Pairing.unpairMessage(deleted: []).hasPrefix("There was no device token"))
+    }
+}
+
+/// Records the waits that a ``Pacing`` asks for, without sleeping.
+actor WaitRecorder {
+    private(set) var waits: [Duration] = []
+    func record(_ duration: Duration) { waits.append(duration) }
+
+    nonisolated func pacing(maxConcurrent: Int = 4) -> Pacing {
+        Pacing(maxConcurrent: maxConcurrent, sleep: { await self.record($0) })
+    }
+}
+
+/// Answers every request with the same status, and counts them.
+actor Refusing: HTTPTransport {
+    let status: Int
+    private(set) var count = 0
+    init(status: Int) { self.status = status }
+
+    func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+        count += 1
+        return HTTPResponse(status: status)
+    }
+}
+
+@Suite struct PacingTests {
+    /// Seeds one document with `count` files and returns its index entries.
+    func seedFiles(_ cloud: FakeCloud, count: Int) async throws -> [IndexEntry] {
+        let files = (0 ..< count).map { ("\(Fixtures.docOne)/p\($0).rm", Data("invented page \($0)".utf8)) }
+        let entry = try await cloud.seedDocument(id: Fixtures.docOne, files: files)
+        try await cloud.seedRoot([entry])
+        let client = try await CloudSession(transport: cloud, deviceToken: { FakeCloud.deviceToken }).client()
+        return try await client.index(id: Fixtures.docOne, hash: entry.hash).index.entries
+    }
+
+    @Test func boundsTheRequestsInFlight() async throws {
+        let cloud = FakeCloud()
+        let entries = try await seedFiles(cloud, count: 12)
+        await cloud.set(latency: .milliseconds(20))
+        await cloud.clearRequests()
+        let session = CloudSession(transport: cloud, deviceToken: { FakeCloud.deviceToken })
+        let client = try await session.client()
+        try await withThrowingTaskGroup(of: Data.self) { group in
+            for entry in entries { group.addTask { try await client.file(entry) } }
+            for try await _ in group {}
+        }
+        let most = await cloud.maxInFlight
+        #expect(most > 1 && most <= 4)
+        let usage = await session.usage()
+        #expect(usage.requests == 13)  // the user token and 12 files
+        #expect(usage.bytes == (await cloud.bytesServed))
+    }
+
+    @Test func waitsWhenTheLimitIsSpent() async throws {
+        let cloud = FakeCloud()
+        let entries = try await seedFiles(cloud, count: 2)
+        await cloud.set(extraHeaders: [
+            "x-ratelimit-limit": "30", "x-ratelimit-remaining": "0", "x-ratelimit-reset": "2",
+        ])
+        let recorder = WaitRecorder()
+        let session = CloudSession(transport: cloud, deviceToken: { FakeCloud.deviceToken }, pacing: recorder.pacing())
+        let client = try await session.client()
+        _ = try await client.file(entries[0])
+        _ = try await client.file(entries[1])
+        // The token response spent the token limit, and each file response spent the file limit.
+        #expect(await recorder.waits == [.seconds(2), .seconds(2), .seconds(2)])
+        #expect(await session.usage().waits == 3)
+    }
+
+    @Test func retriesAReadAfter429And5xx() async throws {
+        let cloud = FakeCloud()
+        let entries = try await seedFiles(cloud, count: 1)
+        await cloud.set(fileFailures: [429, 503])
+        let recorder = WaitRecorder()
+        let session = CloudSession(transport: cloud, deviceToken: { FakeCloud.deviceToken }, pacing: recorder.pacing())
+        let client = try await session.client()
+        #expect(try await client.file(entries[0]) == Data("invented page 0".utf8))
+        #expect(await recorder.waits == [.seconds(1), .seconds(2)])
+        #expect(await session.usage().retries == 2)
+
+        await cloud.set(extraHeaders: ["retry-after": "5"], fileFailures: [429])
+        _ = try await client.file(entries[0])
+        #expect(await recorder.waits.last == .seconds(5))
+    }
+
+    @Test func backsOffAndGivesUp() async throws {
+        let transport = Refusing(status: 429)
+        let recorder = WaitRecorder()
+        let paced = PacedTransport(base: transport, pacing: recorder.pacing())
+        let get = HTTPRequest(method: "GET", url: URL(string: "https://eu.tectonic.remarkable.com/sync/v4/root")!)
+        #expect(try await paced.send(get).status == 429)
+        #expect(await transport.count == 4)  // the request and three retries
+        #expect(await recorder.waits == [.seconds(1), .seconds(2), .seconds(4)])
+    }
+
+    @Test func neverSendsAWriteAgain() async throws {
+        let transport = Refusing(status: 503)
+        let paced = PacedTransport(base: transport, pacing: WaitRecorder().pacing())
+        let post = HTTPRequest(
+            method: "POST",
+            url: URL(string: "https://webapp-prod.cloud.remarkable.engineering/token/json/2/user/new")!
+        )
+        #expect(try await paced.send(post).status == 503)
+        #expect(await transport.count == 1)
+    }
+
+    @Test func readsTheRateLimitHeaders() {
+        let limit = RateLimit(headers: [
+            "x-ratelimit-limit": "48000", "x-ratelimit-remaining": "95998", "x-ratelimit-reset": "1",
+            "retry-after": "2.5",
+        ])
+        #expect(limit.limit == 48000 && limit.remaining == 95998)
+        #expect(limit.reset == .seconds(1) && limit.retryAfter == .milliseconds(2500))
+        #expect(RateLimit(headers: ["x-ratelimit-reset": "soon"]).reset == nil)
+        let file = URL(string: "https://eu.tectonic.remarkable.com/sync/v3/files/\(Fixtures.hashA)")!
+        let other = URL(string: "https://eu.tectonic.remarkable.com/sync/v3/files/\(Fixtures.hashB)")!
+        #expect(PacedTransport.limitKey(for: file) == PacedTransport.limitKey(for: other))
+        #expect(PacedTransport.limitKey(for: file) == "eu.tectonic.remarkable.com/sync/v3/files")
     }
 }
 
