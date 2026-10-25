@@ -9,12 +9,17 @@ struct IndexedDocument {
     var tags: [String]
     var pages: [LibraryPage]
     var pageTags: [Int: [String]]
+    /// Whether any page has typed text, which rePossess draws with substitute fonts.
+    var typedText = false
 
-    /// `text` when no page needs an image without having text,
-    /// `ink` when no page has text, and `partial` otherwise.
+    /// `annotated` when a PDF or EPUB page has ink;
+    /// otherwise `text` when no page needs an image without having text,
+    /// `partial` when some pages have text, `ink` when a notebook page has ink, and `image` otherwise.
     var contentStatus: ContentStatus {
+        if pages.contains(where: { $0.sourcePageIndex != nil && $0.strokeCount > 0 }) { return .annotated }
         guard pages.contains(where: { $0.needsImage && !$0.hasText }) else { return .text }
-        return pages.contains(where: \.hasText) ? .partial : .ink
+        if pages.contains(where: \.hasText) { return .partial }
+        return pages.contains(where: { $0.sourcePageIndex == nil && $0.strokeCount > 0 }) ? .ink : .image
     }
 
     /// The first 160 characters of the first page with text, on one line.
@@ -44,6 +49,7 @@ func indexDocument(_ folder: DocumentFolder) throws -> IndexedDocument {
 
     var pages: [LibraryPage] = []
     var pageTags: [Int: [String]] = [:]
+    var typedText = false
     for reference in content.pages {
         var warnings: [String] = []
         var page = PageContent()
@@ -67,6 +73,7 @@ func indexDocument(_ folder: DocumentFolder) throws -> IndexedDocument {
             }
         }
 
+        typedText = typedText || page.hasText
         var parts: [String] = []
         if !pdfText.isEmpty { parts.append(pdfText) }
         if page.hasText { parts.append(page.markdown) }
@@ -95,7 +102,8 @@ func indexDocument(_ folder: DocumentFolder) throws -> IndexedDocument {
         fileType: content.fileType,
         tags: content.tags,
         pages: pages,
-        pageTags: pageTags
+        pageTags: pageTags,
+        typedText: typedText
     )
 }
 
@@ -122,12 +130,13 @@ extension Library {
             try t.query(
                 """
                 INSERT INTO items (id, kind, name, parent, file_type, modified, page_count, content_status, summary,
-                                   tags, source, usb_modified, cloud_hash, trashed, refreshed, error)
-                VALUES (?, 'DocumentType', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                                   tags, source, usb_modified, cloud_hash, trashed, refreshed, error, typed_text)
+                VALUES (?, 'DocumentType', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
                 ON CONFLICT(id) DO UPDATE SET
                   kind = excluded.kind, name = excluded.name, parent = excluded.parent,
                   file_type = excluded.file_type, modified = excluded.modified, page_count = excluded.page_count,
                   content_status = excluded.content_status, summary = excluded.summary, tags = excluded.tags,
+                  typed_text = excluded.typed_text,
                   source = excluded.source, usb_modified = coalesce(excluded.usb_modified, items.usb_modified),
                   cloud_hash = coalesce(excluded.cloud_hash, items.cloud_hash),
                   trashed = excluded.trashed, refreshed = excluded.refreshed, error = NULL
@@ -138,7 +147,7 @@ extension Library {
                     SQLValue(document.pages.count), .text(document.contentStatus.rawValue),
                     .text(document.summary), .text(encodeJSON(document.tags)), .text(source.rawValue),
                     SQLValue(usbModified), SQLValue(cloudHash), SQLValue(document.metadata.isTrashed),
-                    SQLValue(Date()),
+                    SQLValue(Date()), SQLValue(document.typedText),
                 ]
             )
             try t.query("DELETE FROM pages WHERE document_id = ?", [.text(id)])
@@ -212,10 +221,12 @@ extension Library {
                 try t.query("DELETE FROM pages WHERE document_id = ?", [.text(id)])
                 try t.query("DELETE FROM page_text WHERE document_id = ?", [.text(id)])
                 try t.query("DELETE FROM items WHERE id = ?", [.text(id)])
+                try t.query("DELETE FROM exports WHERE document_id = ?", [.text(id)])
             }
         }
         for id in ids where isValidItemID(id) {
             try? FileManager.default.removeItem(at: documentsURL.appending(path: id))
+            try? FileManager.default.removeItem(at: exportURL(id))
         }
     }
 

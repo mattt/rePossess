@@ -61,6 +61,8 @@ actor FakeTablet: USBTransport {
 
     func setHang(_ value: Bool) { hang = value }
 
+    func removePDF(id: String) { pdfs[id] = nil }
+
     func set(uploadBehavior: UploadBehavior) { self.uploadBehavior = uploadBehavior }
 
     func set(nameForUpload: @escaping @Sendable (String, Data) -> String) { self.nameForUpload = nameForUpload }

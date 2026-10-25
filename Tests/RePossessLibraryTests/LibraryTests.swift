@@ -63,6 +63,8 @@ struct Shelf {
 
     /// Made once, because Core Graphics writes the time into each PDF.
     static let pdf = makePDF(["Zebra crossing rules", "", "Penguin habitats"])
+    /// An invented stand-in for the tablet's PDF export of the typed notebook: one page for each page.
+    static let typedExport = makePDF(["Seed order", "Lighthouse keeper checklist"])
 
     static func annotatedDocument() -> DocumentBuilder {
         var page = PageBuilder()
@@ -90,7 +92,8 @@ struct Shelf {
                 parent: folder,
                 visibleName: "Garden notes"
             ),
-            rmdoc: try typedDocument(extra: typedModified.hasPrefix("2026-10-26") ? " again" : "").rmdoc()
+            rmdoc: try typedDocument(extra: typedModified.hasPrefix("2026-10-26") ? " again" : "").rmdoc(),
+            pdf: typedExport
         )
         await tablet.add(
             USBItem(
@@ -151,7 +154,8 @@ func temporaryLibrary() throws -> Library {
         let library = try temporaryLibrary()
         let report = try await library.refreshUSB(client: usb(tablet))
         #expect(report.listed == 3 && report.downloaded == 3 && report.failed.isEmpty && report.stoppedBy == nil)
-        #expect(report.requests == 5)  // two listings and three downloads
+        #expect(report.requests == 6)  // two listings, three downloads, and the typed notebook's export
+        #expect(report.exportsDownloaded == 1 && report.exportsFailed == 0)
 
         let documents = try library.documents()
         #expect(documents.map(\.path) == ["Garden/Garden notes", "Reading", "Sketches"])
@@ -161,7 +165,7 @@ func temporaryLibrary() throws -> Library {
         let sketches = try #require(documents.first { $0.id == Shelf.handwritten })
         #expect(sketches.contentStatus == .ink)  // one page of ink, one blank
         let reading = try #require(documents.first { $0.id == Shelf.annotated })
-        #expect(reading.contentStatus == .partial)  // page 2 of the PDF has no text
+        #expect(reading.contentStatus == .annotated)  // handwriting on page 1 of the PDF
 
         let pages = try library.pages(of: Shelf.annotated)
         #expect(pages.map(\.sourcePageIndex) == [0, 1, 2])

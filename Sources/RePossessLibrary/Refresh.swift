@@ -28,6 +28,10 @@ public struct RefreshReport: Sendable, Equatable {
     public var filesReused = 0
     /// The size of the reused files.
     public var bytesReused = 0
+    /// The tablet's PDF exports downloaded, for documents with typed text.
+    public var exportsDownloaded = 0
+    /// The exports that the tablet did not give or that could not be read.
+    public var exportsFailed = 0
     /// Requests sent again after HTTP 429 or a 5xx status.
     public var retries = 0
     /// Pauses for the cloud's rate limits.
@@ -54,7 +58,8 @@ public enum RefreshError: Error, CustomStringConvertible {
 
 extension Library {
     /// Holds the library's refresh lock, across processes, while `body` runs.
-    private func withRefreshLock<T>(_ body: () async throws -> T) async throws -> T {
+    /// Refreshes and pushes share it, so that one process at a time talks to the tablet and the cloud.
+    func withRefreshLock<T>(_ body: () async throws -> T) async throws -> T {
         let path = root.appending(path: "refresh.lock").path
         let fd = open(path, O_CREAT | O_RDWR, 0o644)
         guard fd >= 0 else { throw CocoaError(.fileWriteUnknown) }
@@ -114,8 +119,14 @@ extension Library {
     /// whose `ModifiedClient` differs from the library's, one request at a time.
     /// After a complete listing, it removes items that the tablet no longer lists.
     /// A timeout stops the refresh: what was downloaded stays, and the report says why it stopped.
+    ///
+    /// With `exports`, it then downloads the tablet's own PDF of each document with typed text
+    /// whose export is missing or older than the mirror's copy (see ``TabletExport``).
+    /// That covers every document whose typed text changed, and also documents
+    /// whose only change was ink, because an anchored stroke moves with the text.
     public func refreshUSB(
         client: USBClient = USBClient(),
+        exports: Bool = true,
         progress: @Sendable (String) -> Void = { _ in }
     ) async throws -> RefreshReport {
         try await withRefreshLock {
@@ -204,10 +215,32 @@ extension Library {
                         usbModified: item.modifiedClient,
                         cloudHash: nil
                     )
+                    try forgetExport(id: item.id)
                     report.downloaded += 1
                 } catch {
                     report.failed.append("\(item.id): \(error)")
                     recordFailure(id: item.id, name: item.visibleName, parent: item.parent, source: .usb, error: error)
+                }
+            }
+            if exports, report.stoppedBy == nil {
+                let wanted = try documentsNeedingExports(among: Set(documents.map(\.id)))
+                for (i, id) in wanted.enumerated() {
+                    progress("Downloading the tablet's PDF of document \(i + 1) of \(wanted.count).")
+                    do {
+                        let data = try await client.pdf(id: id)
+                        report.bytes += data.count
+                        try storeExport(id: id, data: data)
+                        report.exportsDownloaded += 1
+                    } catch let error as USBError {
+                        if case .http = error {
+                            report.exportsFailed += 1
+                            continue
+                        }
+                        report.stoppedBy = "\(error)"
+                        break
+                    } catch {
+                        report.exportsFailed += 1
+                    }
                 }
             }
             report.requests = await client.requested.count

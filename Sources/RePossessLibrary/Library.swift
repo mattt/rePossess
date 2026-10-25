@@ -2,14 +2,22 @@ import Foundation
 import RePossessFormat
 import Synchronization
 
-/// Whether a document's pages have text.
+/// What a client must look at to read a document: text, ink, or images.
+///
+/// Phase 2's live check found that a client looking for a handwritten notebook
+/// could not tell one from a scanned PDF, because both were `ink`;
+/// phase 3 separates ink on notebook pages, ink on PDF pages, and PDF pages without text.
 public enum ContentStatus: String, Sendable, Codable {
-    /// Every page has text, or has nothing to read.
+    /// Every page has text, or has nothing to read; a page may also have some ink.
     case text
-    /// Some pages are ink, or images, without text.
+    /// Some pages have text, and some notebook pages or PDF pages have none.
     case partial
-    /// No page has text.
+    /// No page has text, and notebook pages have handwriting or drawings: a handwritten notebook.
     case ink
+    /// A PDF or EPUB with handwriting or drawings on its own pages, which the page images show.
+    case annotated
+    /// No page has text or ink: PDF or EPUB pages without a text layer, such as scans.
+    case image
 }
 
 /// Where a document's files came from.
@@ -141,7 +149,11 @@ public final class Library: Sendable {
 
     private func migrate() throws {
         let version = try database.query("PRAGMA user_version").first?.first?.int ?? 0
-        guard version < 1 else { return }
+        if version < 1 { try migrateToVersion1() }
+        if version < 2 { try migrateToVersion2() }
+    }
+
+    private func migrateToVersion1() throws {
         try database.execute(
             """
             CREATE TABLE IF NOT EXISTS items (
@@ -181,6 +193,62 @@ public final class Library: Sendable {
             );
             CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
             PRAGMA user_version = 1;
+            """
+        )
+    }
+
+    /// Phase 3: whether a document has typed text, the queue of pushes, and the tablet's PDF exports.
+    ///
+    /// Until a document is indexed again, `typed_text` comes from its pages:
+    /// a notebook with a page of text has typed text.
+    /// A PDF with a text box on a page gets the flag at its next download.
+    /// `content_status` gains `annotated` and `image` from the stored pages.
+    /// A refresh error without a time is cleared: before phase 2, a failed refresh
+    /// wrote its error without a time, and `status` showed it as "time unknown" after later successes.
+    private func migrateToVersion2() throws {
+        try database.execute(
+            """
+            BEGIN;
+            ALTER TABLE items ADD COLUMN typed_text INTEGER NOT NULL DEFAULT 0;
+            UPDATE items SET typed_text = 1
+              WHERE kind = 'DocumentType' AND file_type = 'notebook'
+              AND EXISTS (SELECT 1 FROM pages WHERE pages.document_id = items.id AND pages.has_text = 1);
+            CREATE TABLE IF NOT EXISTS pushes (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                bytes INTEGER NOT NULL,
+                pages INTEGER,
+                created REAL NOT NULL,
+                status TEXT NOT NULL,
+                via TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_attempt REAL,
+                sent REAL,
+                tablet_id TEXT,
+                preexisting TEXT NOT NULL DEFAULT '[]',
+                error TEXT
+            );
+            CREATE TABLE IF NOT EXISTS exports (
+                document_id TEXT PRIMARY KEY,
+                modified REAL,
+                pages INTEGER NOT NULL,
+                bytes INTEGER NOT NULL,
+                downloaded REAL NOT NULL
+            );
+            UPDATE items SET content_status = 'annotated'
+              WHERE kind = 'DocumentType' AND EXISTS (SELECT 1 FROM pages WHERE pages.document_id = items.id
+                AND pages.source_page IS NOT NULL AND pages.stroke_count > 0);
+            UPDATE items SET content_status = 'image'
+              WHERE content_status = 'ink' AND NOT EXISTS (SELECT 1 FROM pages WHERE pages.document_id = items.id
+                AND pages.source_page IS NULL AND pages.stroke_count > 0);
+            UPDATE state SET value = ''
+              WHERE key IN ('usb.last_error', 'cloud.last_error') AND NOT EXISTS (
+                SELECT 1 FROM state AS t WHERE t.key = replace(state.key, 'last_error', 'last_error_at')
+                  AND t.value IS NOT NULL AND t.value != '');
+            PRAGMA user_version = 2;
+            COMMIT;
             """
         )
     }
