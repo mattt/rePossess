@@ -26,7 +26,10 @@ public final class AppModel {
     public private(set) var refreshing = false
     public private(set) var lastOutcome: RefreshOutcome?
     public private(set) var recognizing = false
+    /// The last line of the last background recognition.
     public private(set) var lastRecognition: String?
+    /// Why the last background recognition failed, or `nil` after a success.
+    public private(set) var recognitionFailure: String?
 
     /// The refresh interval; the settings change it, and `UserDefaults` keeps it.
     public var intervalMinutes: Int {
@@ -135,6 +138,18 @@ public final class AppModel {
         snapshot.nextRefresh = nextRefresh
     }
 
+    /// What the menu shows, from the snapshot and the work in progress.
+    public var menuStatus: MenuStatus {
+        MenuStatus(
+            snapshot: snapshot,
+            refreshing: refreshing,
+            lastOutcome: lastOutcome,
+            recognizing: recognizing,
+            recognitionFailure: recognitionFailure,
+            readiness: recognizerReadiness
+        )
+    }
+
     /// The schedule from the settings.
     public var schedule: RefreshSchedule { RefreshSchedule(intervalMinutes: intervalMinutes) }
 
@@ -161,8 +176,9 @@ public final class AppModel {
         monitor.start(queue: DispatchQueue(label: "co.dododo.repossess.network"))
         self.monitor = monitor
         startLink()
-        // The status lines hold counts, times, and error messages, not document names.
+        // The status lines and the menu's rows hold counts, times, and error messages, not document names.
         Log.refresh.notice("Started with the status: \(self.snapshot.lines.joined(separator: " | "), privacy: .public)")
+        Log.refresh.notice("The menu shows: \(self.menuStatus.rows.joined(separator: " | "), privacy: .public)")
         // Pages that a refresh by `repossess` brought while the app was closed wait too.
         recognizeInBackground()
         loop = Task { [weak self] in
@@ -325,12 +341,13 @@ public final class AppModel {
             recognizing = false
             switch result {
             case .success(let run):
-                lastRecognition =
-                    run.exitStatus == 0
-                    ? run.lastLine
-                    : "Recognition stopped (\(run.exitStatus)): \(StatusSnapshot.shorten(run.lastLine))"
+                lastRecognition = run.lastLine
+                recognitionFailure =
+                    run.exitStatus == 0 ? nil : "The recognizer stopped with status \(run.exitStatus): \(run.lastLine)"
             case .failure(let skip):
-                lastRecognition = skip.skip == .helperMissing ? "The repossess helper is not beside the app." : nil
+                lastRecognition = nil
+                recognitionFailure =
+                    skip.skip == .helperMissing ? "The repossess helper is not beside the app's executable." : nil
             }
             updateSnapshot()
         }

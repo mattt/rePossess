@@ -9,24 +9,34 @@ public enum SettingsTab: String, Hashable, Sendable, CaseIterable {
     public static let storageKey = "settingsPane"
 }
 
-/// The menu bar menu: the status lines, "Refresh Now", and the settings.
+/// The menu bar menu: one status, the connection, the problems and work that need attention,
+/// then "Refresh Now", the settings, and Quit.
+///
+/// Status rows are disabled text; a row that opens a settings pane is a button that ends in an ellipsis.
 struct MenuContent: View {
     @Bindable var model: AppModel
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        ForEach(Array(model.snapshot.lines.enumerated()), id: \.offset) { _, line in
-            Text(line)
+        let status = model.menuStatus
+        Section {
+            Text(status.headline)
+            if let next = status.nextRefresh { Text(next) }
+            Text(status.connection)
         }
-        if model.refreshing {
-            Text("Refreshing…")
-        } else if let outcome = model.lastOutcome {
-            Text(StatusSnapshot.shorten(outcome.summary))
-        }
-        if model.recognizing {
-            Text("Recognizing handwriting…")
-        } else if let last = model.lastRecognition {
-            Text(StatusSnapshot.shorten(last))
+        if !status.problems.isEmpty || !status.queue.isEmpty || status.handwriting != nil {
+            Divider()
+            ForEach(status.problems, id: \.title) { problem in
+                Button("\(problem.title)…") { SettingsRouter.show(problem.pane, with: openSettings) }
+            }
+            ForEach(status.queue, id: \.self) { Text($0) }
+            if let handwriting = status.handwriting {
+                if handwriting.opensPane {
+                    Button("\(handwriting.title)…") { SettingsRouter.show(.recognizer, with: openSettings) }
+                } else {
+                    Text(handwriting.title)
+                }
+            }
         }
         Divider()
         Button("Refresh Now") { model.refresh(.manual) }

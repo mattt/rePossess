@@ -508,3 +508,136 @@ import Testing
         #expect(ModelDownloadState.finished.bytes == nil)
     }
 }
+
+@Suite struct MenuStatusTests {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func library(_ change: (inout LibraryStatus) -> Void = { _ in }) -> LibraryStatus {
+        var status = LibraryStatus(
+            root: URL(filePath: "/tmp/invented"),
+            documents: 3,
+            folders: 1,
+            pages: 9,
+            lastRefresh: [:],
+            lastError: [:],
+            lastErrorAt: [:]
+        )
+        change(&status)
+        return status
+    }
+
+    func menu(
+        _ snapshot: StatusSnapshot,
+        refreshing: Bool = false,
+        outcome: RefreshOutcome? = nil,
+        recognizing: Bool = false,
+        failure: String? = nil,
+        readiness: RecognizerReadiness = .off
+    ) -> MenuStatus {
+        MenuStatus(
+            snapshot: snapshot,
+            refreshing: refreshing,
+            lastOutcome: outcome,
+            recognizing: recognizing,
+            recognitionFailure: failure,
+            readiness: readiness
+        )
+    }
+
+    @Test func aQuietMenuHasThreeShortRows() {
+        let snapshot = StatusSnapshot(
+            usbPresent: false,
+            pairing: .paired(service: "rePossess"),
+            library: library { $0.lastRefresh = [.cloud: now.addingTimeInterval(-180)] },
+            nextRefresh: now.addingTimeInterval(12 * 60),
+            now: now
+        )
+        let status = menu(snapshot)
+        #expect(status.headline == "Library Updated 3 Minutes Ago")
+        #expect(status.nextRefresh == "Next Refresh in About 12 Minutes")
+        #expect(status.connection == "Tablet Not on USB · Cloud Paired")
+        #expect(status.problems.isEmpty && status.queue.isEmpty && status.handwriting == nil)
+        // No row names a Keychain item or a model repository.
+        for row in [status.headline, status.nextRefresh ?? "", status.connection] {
+            #expect(!row.contains("rePossess spike") && !row.contains("mlx-community"))
+        }
+    }
+
+    @Test func oneFailureAppearsOnceAndOpensItsPane() {
+        let snapshot = StatusSnapshot(
+            usbPresent: false,
+            pairing: .paired(service: "rePossess"),
+            library: library {
+                $0.lastRefresh = [.cloud: now.addingTimeInterval(-3 * 3600)]
+                $0.lastError = [.cloud: "HTTP 503 from the invented host, with a long explanation that goes on"]
+                $0.lastErrorAt = [.cloud: now.addingTimeInterval(-60)]
+            },
+            now: now
+        )
+        let failed = RefreshOutcome(
+            trigger: .schedule,
+            result: .failed("HTTP 503 from the invented host, with a long explanation that goes on"),
+            started: now,
+            ended: now
+        )
+        let status = menu(snapshot, outcome: failed)
+        #expect(status.problems == [.init(title: "Cloud Refresh Failed 1 Minute Ago", pane: .cloud)])
+        // Without the library's record, the outcome is the one problem.
+        let unrecorded = StatusSnapshot(usbPresent: false, pairing: .notPaired, library: library(), now: now)
+        #expect(menu(unrecorded, outcome: failed).problems == [.init(title: "Refresh Failed", pane: .general)])
+        #expect(menu(unrecorded, refreshing: true, outcome: failed).problems.isEmpty)
+        #expect(menu(unrecorded, refreshing: true).headline == "Refreshing…")
+        let usb = StatusSnapshot(
+            usbPresent: true,
+            pairing: .keychainOff,
+            library: library { $0.lastError = [.usb: "invented USB error"] },
+            now: now
+        )
+        #expect(menu(usb).problems == [.init(title: "USB Refresh Failed", pane: .general)])
+        #expect(menu(usb).connection == "Tablet on USB · Cloud Not Checked")
+    }
+
+    @Test func theQueueAndHandwritingShowOnlyWhenTheyNeedAttention() throws {
+        var counts = RecognitionCounts()
+        counts.pagesWithInk = 5
+        counts.text = 3
+        let snapshot = StatusSnapshot(
+            usbPresent: false,
+            pairing: .notPaired,
+            library: library(),
+            pushCounts: [.pending: 2, .unknown: 1, .sent: 4],
+            recognizer: try RecognizerConfiguration(provider: .mlx),
+            recognition: counts,
+            now: now
+        )
+        #expect(menu(snapshot).queue == ["2 Documents Waiting to Send", "1 Delivery Unconfirmed"])
+        #expect(menu(snapshot, readiness: .ready).handwriting?.title == "Handwriting: 2 Pages Waiting")
+        let required = menu(snapshot, readiness: .modelRequired).handwriting
+        #expect(required?.title == "Handwriting: Model Required" && required?.opensPane == true)
+        #expect(menu(snapshot, recognizing: true, readiness: .ready).handwriting?.title == "Recognizing Handwriting…")
+        let failed = menu(snapshot, failure: "invented failure", readiness: .ready).handwriting
+        #expect(failed?.title == "Handwriting Recognition Failed" && failed?.opensPane == true)
+        #expect(menu(snapshot, readiness: .off).handwriting == nil)
+    }
+
+    @Test func titleCaseLeavesShortWordsAndAcronyms() {
+        #expect(MenuStatus.titleCased("library updated just now") == "Library Updated Just Now")
+        #expect(MenuStatus.titleCased("next refresh in about 1 hour") == "Next Refresh in About 1 Hour")
+        #expect(MenuStatus.titleCased("USB refresh failed") == "USB Refresh Failed")
+    }
+
+    @Test func theSettingsSayTheLastAndNextRefresh() {
+        let snapshot = StatusSnapshot(
+            usbPresent: false,
+            pairing: .notPaired,
+            library: library { $0.lastRefresh = [.usb: now.addingTimeInterval(-180)] },
+            nextRefresh: now.addingTimeInterval(12 * 60),
+            now: now
+        )
+        #expect(snapshot.lastRefreshText == "From USB 3 minutes ago")
+        #expect(snapshot.nextRefreshText == "In about 12 minutes")
+        let unscheduled = StatusSnapshot(usbPresent: false, pairing: .notPaired, now: now)
+        #expect(unscheduled.lastRefreshText == "Not yet")
+        #expect(unscheduled.nextRefreshText == "When the tablet connects or on request")
+    }
+}

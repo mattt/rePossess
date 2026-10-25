@@ -1,5 +1,6 @@
 import AppKit
 import RePossessCloud
+import RePossessLibrary
 import RePossessRecognize
 import SwiftUI
 
@@ -71,45 +72,48 @@ enum SettingsLayout {
 struct GeneralSettings: View {
     @Bindable var model: AppModel
     @State private var opensAtLogin = false
-    @State private var loginError: String?
+    @State private var loginNotice: Notice?
 
     var body: some View {
+        let snapshot = model.snapshot
         Form {
-            Section("Library") {
-                LabeledContent("Folder") {
-                    HStack {
-                        Text(model.options.libraryRoot.path)
-                            .textSelection(.enabled)
-                            .truncationMode(.middle)
-                        Button("Show in Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([model.options.libraryRoot])
-                        }
-                    }
-                }
-                if let error = model.libraryError { Text(error).foregroundStyle(.red) }
-            }
-            Section("Refresh") {
-                Picker("Refresh the mirror", selection: $model.intervalMinutes) {
+            Section {
+                Picker("Refresh interval", selection: $model.intervalMinutes) {
                     ForEach(RefreshSchedule.choices, id: \.self) { minutes in
                         Text(RefreshSchedule.label(minutes: minutes)).tag(minutes)
                     }
                 }
-                Text(
-                    """
-                    rePossess refreshes over USB when the tablet connects, \
-                    and on this schedule over USB when the tablet is connected, or else from reMarkable's cloud. \
-                    After each refresh it sends the queued pushes, and recognizes new handwriting \
-                    when a recognizer is set.
-                    """
-                )
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                LabeledContent("Mirror") {
-                    // Relative times in whole minutes, from the status that the app reads every 15 seconds.
-                    Text(model.snapshot.refreshTimes())
+                // Relative times in whole minutes, from the status that the app reads every 15 seconds.
+                LabeledContent("Last refresh", value: snapshot.lastRefreshText)
+                LabeledContent("Next refresh", value: snapshot.nextRefreshText)
+                HStack(spacing: 8) {
+                    Button("Refresh Now") { model.refresh(.manual) }
+                        .disabled(model.refreshing || model.library == nil)
+                    if model.refreshing {
+                        ProgressView().controlSize(.small).accessibilityLabel("Refreshing")
+                        Text("Refreshing…").foregroundStyle(.secondary)
+                    }
                 }
-                Button("Refresh Now") { model.refresh(.manual) }
-                    .disabled(model.refreshing || model.library == nil)
+                ForEach(model.refreshNotices, id: \.text) { NoticeView(notice: $0) }
+            } header: {
+                Text("Refresh")
+            } footer: {
+                Text(
+                    "rePossess refreshes over USB when the tablet connects, and on this schedule over USB or from reMarkable's cloud. After each refresh, it sends the documents that wait and reads new handwriting when recognition is on."
+                )
+                .foregroundStyle(.secondary)
+            }
+            if !model.menuStatus.queue.isEmpty {
+                Section {
+                    ForEach(model.menuStatus.queue, id: \.self) { Text($0) }
+                } header: {
+                    Text("Documents to Send")
+                } footer: {
+                    Text(
+                        "rePossess sends each document at the next refresh. An unconfirmed delivery got no answer; rePossess checks whether it arrived before it sends it again."
+                    )
+                    .foregroundStyle(.secondary)
+                }
             }
             Section("Login") {
                 Toggle("Open rePossess at login", isOn: $opensAtLogin)
@@ -117,13 +121,36 @@ struct GeneralSettings: View {
                         guard enabled != model.opensAtLogin else { return }
                         do {
                             try model.setOpensAtLogin(enabled)
-                            loginError = nil
+                            loginNotice = nil
                         } catch {
-                            loginError = "\(error)"
+                            loginNotice = .failed("The login item could not be changed.", error)
                             opensAtLogin = model.opensAtLogin
                         }
                     }
-                if let loginError { Text(loginError).foregroundStyle(.red) }
+                if let loginNotice { NoticeView(notice: loginNotice) }
+            }
+            Section {
+                LabeledContent("Folder") {
+                    Text(model.options.libraryRoot.path)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(model.options.libraryRoot.path)
+                }
+                Button("Show in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([model.options.libraryRoot])
+                }
+                .accessibilityLabel("Show the library folder in Finder")
+                if let error = model.libraryError {
+                    NoticeView(notice: Notice(kind: .failed, text: "The library could not be opened.", details: error))
+                }
+            } header: {
+                Text("Local Library")
+            } footer: {
+                Text(
+                    "The local library holds a copy of the tablet's documents, their index, and the documents that wait to be sent."
+                )
+                .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -342,5 +369,29 @@ struct FileText: View {
             }
             .background(.quaternary.opacity(0.5))
         }
+    }
+}
+
+extension AppModel {
+    /// The refresh's problems for the General pane, with the full text behind "Details".
+    /// The menu's problem rows open this pane, or Cloud for a cloud error.
+    var refreshNotices: [Notice] {
+        var notices: [Notice] = []
+        let library = snapshot.library
+        for (source, name) in [(Source.usb, "USB"), (.cloud, "cloud")] {
+            guard let error = library?.lastError[source] else { continue }
+            let when = library?.lastErrorAt[source].map { " " + StatusSnapshot.age($0, now: snapshot.now) } ?? ""
+            notices.append(Notice(kind: .failed, text: "The last \(name) refresh failed\(when).", details: error))
+        }
+        guard notices.isEmpty, !refreshing, let outcome = lastOutcome else { return notices }
+        switch outcome.result {
+        case .failed(let message):
+            notices.append(Notice(kind: .failed, text: "The last refresh failed.", details: message))
+        case .noPath, .busyElsewhere:
+            notices.append(.info(outcome.summary))
+        case .finished, .alreadyRunning:
+            break
+        }
+        return notices
     }
 }

@@ -50,6 +50,9 @@ struct RecognizerSettings: View {
                         setup = SetupRequest(draft: RecognizerDraft(configuration), enabling: false)
                     }
                 }
+                if let failure = model.recognitionFailure {
+                    NoticeView(notice: Notice(kind: .failed, text: "The last recognition failed.", details: failure))
+                }
                 if let notice { NoticeView(notice: notice) }
             } header: {
                 Text("Handwriting")

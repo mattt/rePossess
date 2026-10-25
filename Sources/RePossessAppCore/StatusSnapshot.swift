@@ -140,6 +140,19 @@ public struct StatusSnapshot: Sendable, Equatable {
         return text
     }
 
+    /// The last refresh, for the settings, such as "From USB 3 minutes ago".
+    public var lastRefreshText: String {
+        guard let latest = library?.latestRefresh else { return "Not yet" }
+        return "From \(latest.source == .usb ? "USB" : "the cloud") \(Self.age(latest.date, now: now))"
+    }
+
+    /// The next scheduled refresh, for the settings, such as "In about 12 minutes".
+    public var nextRefreshText: String {
+        guard let nextRefresh else { return "When the tablet connects or on request" }
+        let text = Self.until(nextRefresh, now: now)
+        return text.prefix(1).uppercased() + text.dropFirst()
+    }
+
     /// The queue of pushes.
     public var pushesLine: String {
         let parts = [
