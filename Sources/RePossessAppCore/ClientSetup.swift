@@ -24,6 +24,17 @@ public struct ClientSetup: Sendable, Equatable {
         executable?.deletingLastPathComponent().appending(path: "repossess")
     }
 
+    /// Whether an app bundle is in `/Applications` or the user's `~/Applications`,
+    /// where a client's configuration can name its helper for good.
+    public static func isInApplications(
+        _ bundle: URL,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> Bool {
+        let path = bundle.standardizedFileURL.path
+        return path.hasPrefix("/Applications/")
+            || path.hasPrefix(home.appending(path: "Applications").standardizedFileURL.path + "/")
+    }
+
     /// The client's entry, as Claude Desktop and Claude Code's `.mcp.json` write it.
     var entry: [String: Any] {
         ["command": helperPath, "args": arguments]

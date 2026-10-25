@@ -203,6 +203,14 @@ import Testing
         #expect(ClientSetup.tomlString("a \"b\" \\c") == "\"a \\\"b\\\" \\\\c\"")
     }
 
+    @Test func onlyAnAppInApplicationsHasALastingPath() {
+        let home = URL(filePath: "/Users/invented", directoryHint: .isDirectory)
+        #expect(ClientSetup.isInApplications(URL(filePath: "/Applications/rePossess.app"), home: home))
+        #expect(ClientSetup.isInApplications(URL(filePath: "/Users/invented/Applications/rePossess.app"), home: home))
+        #expect(!ClientSetup.isInApplications(URL(filePath: "/tmp/build/rePossess.app"), home: home))
+        #expect(!ClientSetup.isInApplications(URL(filePath: "/Applications Old/rePossess.app"), home: home))
+    }
+
     @Test func theHelperIsBesideTheAppsExecutable() {
         let helper = ClientSetup.bundledHelper(
             executable: URL(filePath: "/Applications/rePossess.app/Contents/MacOS/RePossessApp")
