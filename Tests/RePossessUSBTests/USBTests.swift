@@ -8,7 +8,8 @@ import Testing
         USBClient(transport: tablet, checkInterface: { connected })
     }
 
-    @Test func routesAreTheThreeThatWork() throws {
+    @Test func routesAreTheFourThatWork() throws {
+        #expect(try USBRoute.upload.path() == "/upload")
         #expect(try USBRoute.documents(folder: nil).path() == "/documents/")
         #expect(try USBRoute.documents(folder: "ab-12").path() == "/documents/ab-12")
         #expect(try USBRoute.rmdoc(id: "ab-12").path() == "/download/ab-12/rmdoc")
@@ -77,5 +78,32 @@ import Testing
         #expect(try await usb.pdf(id: "d1") == Data([3]))
         await #expect(throws: USBError.http(route: "/download/d9/rmdoc", status: 404)) { try await usb.rmdoc(id: "d9") }
         #expect(await usb.requested == [.rmdoc(id: "d1"), .pdf(id: "d1"), .rmdoc(id: "d9")])
+    }
+
+    @Test func uploadsOneMultipartField() async throws {
+        let tablet = FakeTablet()
+        let usb = client(tablet)
+        let pdf = Data("%PDF-1.4 invented\r\n--not-a-boundary\r\n".utf8)
+        try await usb.upload(USBUpload(kind: .pdf, title: "rePossess test \"quoted\"/slash", data: pdf))
+        let upload = try #require(await tablet.uploads.first)
+        #expect(upload.fileName == "rePossess test -quoted--slash.pdf")
+        #expect(upload.contentType == "application/pdf")
+        #expect(upload.data == pdf)
+        let items = await tablet.items
+        #expect(items.count == 1 && items[0].visibleName == "rePossess test -quoted--slash" && items[0].parent == "")
+        #expect(await usb.requested == [.upload])
+        #expect(await tablet.paths == ["POST /upload"])
+    }
+
+    @Test func anUploadThatTimesOutStopsTheClient() async throws {
+        let tablet = FakeTablet()
+        await tablet.set(uploadBehavior: .acceptThenTimeOut)
+        let usb = client(tablet)
+        await #expect(throws: USBError.timedOut(route: "/upload", seconds: 120)) {
+            try await usb.upload(USBUpload(kind: .epub, title: "rePossess test", data: Data([0x50, 0x4B, 3, 4])))
+        }
+        #expect(await tablet.items.count == 1)
+        await #expect(throws: USBError.stopped) { try await usb.list() }
+        #expect(USBUpload(kind: .rmdoc, title: "t", data: Data()).kind.contentType == "application/octet-stream")
     }
 }

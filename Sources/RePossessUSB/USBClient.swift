@@ -6,7 +6,7 @@ import Foundation
 /// but `GET /thumbnail/<id>` and `POST /search/<keyword>` hang the interface
 /// until the setting is switched off and on (spike 1, 2026-10-25).
 /// So this type has no case for them, and the client can send nothing else.
-/// Phase 1 reads only, so the upload route is not here either.
+/// Phase 3 adds the upload, which spikes 1 and 4 used on 2026-10-25.
 public enum USBRoute: Sendable, Equatable, CustomStringConvertible {
     /// `GET /documents/` for the top level, or `GET /documents/<folder-id>`.
     case documents(folder: String?)
@@ -14,6 +14,8 @@ public enum USBRoute: Sendable, Equatable, CustomStringConvertible {
     case rmdoc(id: String)
     /// `GET /download/<id>/pdf`: a PDF that the tablet renders.
     case pdf(id: String)
+    /// `POST /upload`: a new document from a multipart field named `file`.
+    case upload
 
     /// The path, after checking that any ID has only letters, digits, and hyphens.
     func path() throws -> String {
@@ -22,6 +24,7 @@ public enum USBRoute: Sendable, Equatable, CustomStringConvertible {
         case .documents(let folder?): return "/documents/\(try Self.checked(folder))"
         case .rmdoc(let id): return "/download/\(try Self.checked(id))/rmdoc"
         case .pdf(let id): return "/download/\(try Self.checked(id))/pdf"
+        case .upload: return "/upload"
         }
     }
 
@@ -105,6 +108,8 @@ public enum USBError: Error, Equatable, CustomStringConvertible {
     case stopped
     /// The tablet answered with an error status.
     case http(route: String, status: Int)
+    /// The connection closed before the answer, perhaps after the request arrived.
+    case connectionLost(String)
     /// The listing was not the JSON that the tablet sends.
     case malformedListing(String)
     /// A document or folder ID had characters other than letters, digits, and hyphens.
@@ -126,6 +131,7 @@ public enum USBError: Error, Equatable, CustomStringConvertible {
             "rePossess stopped sending requests to the tablet after a timeout in this refresh. "
                 + "Switch the USB web interface off and on, then refresh again."
         case .http(let route, let status): "the tablet answered \(route) with HTTP \(status)"
+        case .connectionLost(let message): "the connection to the tablet closed before its answer: \(message)"
         case .malformedListing(let reason): "the tablet's listing could not be read: \(reason)"
         case .invalidID(let id): "not a tablet document ID: \(id)"
         case .network(let message): "USB request failed: \(message)"
@@ -133,10 +139,13 @@ public enum USBError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// Sends one GET request to the tablet.
+/// Sends one request to the tablet.
 public protocol USBTransport: Sendable {
-    /// Returns the status and body, or throws ``USBError``.
+    /// Sends a GET request, and returns the status and body, or throws ``USBError``.
     func get(_ url: URL, timeout: TimeInterval) async throws -> (status: Int, body: Data)
+    /// Sends a POST request with a body, and returns the status and body, or throws ``USBError``.
+    func post(_ url: URL, body: Data, contentType: String, timeout: TimeInterval) async throws
+        -> (status: Int, body: Data)
 }
 
 /// The live transport, with `URLSession`.
@@ -153,6 +162,21 @@ public struct URLSessionUSBTransport: USBTransport {
     public func get(_ url: URL, timeout: TimeInterval) async throws -> (status: Int, body: Data) {
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = "GET"
+        return try await send(request, url: url, timeout: timeout)
+    }
+
+    public func post(_ url: URL, body: Data, contentType: String, timeout: TimeInterval) async throws
+        -> (status: Int, body: Data)
+    {
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.httpMethod = "POST"
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        return try await send(request, url: url, timeout: timeout)
+    }
+
+    private func send(_ request: URLRequest, url: URL, timeout: TimeInterval) async throws -> (status: Int, body: Data)
+    {
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw USBError.network("not an HTTP response") }
@@ -163,7 +187,9 @@ public struct URLSessionUSBTransport: USBTransport {
                 throw USBError.timedOut(route: url.path(), seconds: Int(timeout))
             case .cannotConnectToHost:
                 throw USBError.interfaceOff
-            case .cannotFindHost, .notConnectedToInternet, .networkConnectionLost:
+            case .networkConnectionLost:
+                throw USBError.connectionLost(error.localizedDescription)
+            case .cannotFindHost, .notConnectedToInternet:
                 throw USBError.network(error.localizedDescription)
             default:
                 throw USBError.network(error.localizedDescription)
@@ -187,6 +213,7 @@ public actor USBClient {
     let listTimeout: TimeInterval
     let downloadTimeout: TimeInterval
     let pdfTimeout: TimeInterval
+    let uploadTimeout: TimeInterval
     let checkInterface: @Sendable () -> Bool
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -198,6 +225,7 @@ public actor USBClient {
     ///   - listTimeout: Seconds for a folder listing, which took 13 ms in spike 1.
     ///   - downloadTimeout: Seconds for an rmdoc download; a 7.2 MB archive took under 1.5 s.
     ///   - pdfTimeout: Seconds for a PDF that the tablet renders; 10 pages took 5.3 s.
+    ///   - uploadTimeout: Seconds for an upload; uploads of up to 29 KB took 0.03 to 0.25 s in spikes 1 and 4.
     ///   - checkInterface: Whether the Mac is on the tablet's USB network.
     public init(
         host: URL = USBClient.defaultHost,
@@ -205,6 +233,7 @@ public actor USBClient {
         listTimeout: TimeInterval = 10,
         downloadTimeout: TimeInterval = 60,
         pdfTimeout: TimeInterval = 120,
+        uploadTimeout: TimeInterval = 120,
         checkInterface: @escaping @Sendable () -> Bool = USBNetwork.isPresent
     ) {
         self.host = host
@@ -212,6 +241,7 @@ public actor USBClient {
         self.listTimeout = listTimeout
         self.downloadTimeout = downloadTimeout
         self.pdfTimeout = pdfTimeout
+        self.uploadTimeout = uploadTimeout
         self.checkInterface = checkInterface
     }
 
@@ -257,7 +287,21 @@ public actor USBClient {
         try await send(.pdf(id: id), timeout: pdfTimeout)
     }
 
-    private func send(_ route: USBRoute, timeout: TimeInterval) async throws -> Data {
+    /// Uploads one file, which the tablet adds as a new document at the top level.
+    ///
+    /// The answer has no document ID: the tablet assigns new document and page IDs
+    /// (spikes 1 and 4), so a caller finds the document by listing the folder.
+    /// Spike 1 saw HTTP 201 and `{"status":"Upload successful"}`,
+    /// and a PDF named `repossess-test.pdf` became a document named "repossess-test".
+    /// An rmdoc takes the name in its `.metadata` instead (spike 4).
+    public func upload(_ file: USBUpload) async throws {
+        let (body, contentType) = file.multipart()
+        _ = try await send(.upload, timeout: uploadTimeout, body: body, contentType: contentType)
+    }
+
+    private func send(_ route: USBRoute, timeout: TimeInterval, body: Data? = nil, contentType: String = "")
+        async throws -> Data
+    {
         let path = try route.path()
         await acquire()
         defer { release() }
@@ -266,7 +310,12 @@ public actor USBClient {
         requested.append(route)
         do {
             let url = URL(string: path, relativeTo: host)!.absoluteURL
-            let (status, body) = try await transport.get(url, timeout: timeout)
+            let (status, body) =
+                if let body {
+                    try await transport.post(url, body: body, contentType: contentType, timeout: timeout)
+                } else {
+                    try await transport.get(url, timeout: timeout)
+                }
             guard (200 ..< 300).contains(status) else { throw USBError.http(route: path, status: status) }
             return body
         } catch let error as USBError {
@@ -289,6 +338,71 @@ public actor USBClient {
         } else {
             waiters.removeFirst().resume()
         }
+    }
+}
+
+/// A file to upload over USB.
+public struct USBUpload: Sendable, Equatable {
+    /// The kinds of file that the support article lists for the USB web interface.
+    public enum Kind: String, Sendable, Equatable {
+        case pdf, epub, rmdoc
+
+        /// The part's content type. curl sent `application/pdf` for spike 1's PDF
+        /// and `application/octet-stream` for spike 4's rmdoc files, and the tablet accepted both.
+        /// `application/epub+zip` for EPUB is unchecked.
+        public var contentType: String {
+            switch self {
+            case .pdf: "application/pdf"
+            case .epub: "application/epub+zip"
+            case .rmdoc: "application/octet-stream"
+            }
+        }
+    }
+
+    /// The upload limit in reMarkable's support article (unchecked on the tablet).
+    public static let maxBytes = 100_000_000
+
+    public var kind: Kind
+    /// The name of the document that the upload should make.
+    public var title: String
+    public var data: Data
+
+    public init(kind: Kind, title: String, data: Data) {
+        self.kind = kind
+        self.title = title
+        self.data = data
+    }
+
+    /// The part's file name: the title with the kind's extension.
+    /// Quotes, slashes, backslashes, and control characters become hyphens,
+    /// so that the multipart header stays well formed.
+    public var fileName: String { "\(fileStem).\(kind.rawValue)" }
+
+    /// The name that the tablet gives a PDF or an EPUB: the file name without its extension
+    /// (checked for one PDF with an ASCII name in spike 1).
+    public var fileStem: String {
+        String(
+            String.UnicodeScalarView(
+                title.unicodeScalars.map { scalar in
+                    "\"\\/".unicodeScalars.contains(scalar) || CharacterSet.controlCharacters.contains(scalar)
+                        ? "-" : scalar
+                }
+            )
+        )
+    }
+
+    /// The names under which the upload may appear in a listing.
+    public var expectedNames: Set<String> { [title, fileStem] }
+
+    /// The multipart body with one field, `file`, and its content type.
+    func multipart(boundary: String = "repossess-\(UUID().uuidString)") -> (body: Data, contentType: String) {
+        var body = Data()
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".utf8))
+        body.append(Data("Content-Type: \(kind.contentType)\r\n\r\n".utf8))
+        body.append(data)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        return (body, "multipart/form-data; boundary=\(boundary)")
     }
 }
 

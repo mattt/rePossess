@@ -3,11 +3,41 @@ import Foundation
 /// An in-memory stand-in for the tablet's USB web interface, for tests.
 ///
 /// It is internal; tests reach it with `@testable import`.
-/// It serves the listing and both downloads, and records every path it was asked for.
+/// It serves the listing, both downloads, and the upload, and records every path it was asked for.
 /// When `hang` is set, every request times out, as the Paper Pure's interface did
 /// after a thumbnail or search request in spike 1.
+/// An upload adds a document with a new ID at the top level, as the Paper Pure did in spikes 1 and 4,
+/// and `uploadBehavior` can lose the answer before or after the tablet adds it.
 actor FakeTablet: USBTransport {
+    /// What the next uploads do.
+    enum UploadBehavior: Sendable {
+        /// Add the document and answer 201.
+        case accept
+        /// Add the document, then time out.
+        case acceptThenTimeOut
+        /// Time out without adding the document.
+        case timeOut
+        /// Answer with a status and add nothing.
+        case status(Int)
+    }
+
+    /// One upload that the fake received.
+    struct Upload: Sendable {
+        var fileName: String
+        var contentType: String
+        var data: Data
+    }
+
     var items: [USBItem] = []
+    var uploadBehavior: UploadBehavior = .accept
+    private(set) var uploads: [Upload] = []
+    /// The name that an upload gets; by default the file name without its extension.
+    /// Tests that upload rmdoc files read the name from the archive's metadata.
+    var nameForUpload: @Sendable (String, Data) -> String = { fileName, _ in
+        (fileName as NSString).deletingPathExtension
+    }
+    /// The time that the tablet writes as `ModifiedClient` for an upload.
+    var clock: @Sendable () -> Date = Date.init
     var archives: [String: Data] = [:]
     var pdfs: [String: Data] = [:]
     var hang = false
@@ -30,6 +60,65 @@ actor FakeTablet: USBTransport {
     }
 
     func setHang(_ value: Bool) { hang = value }
+
+    func set(uploadBehavior: UploadBehavior) { self.uploadBehavior = uploadBehavior }
+
+    func set(nameForUpload: @escaping @Sendable (String, Data) -> String) { self.nameForUpload = nameForUpload }
+
+    func post(_ url: URL, body: Data, contentType: String, timeout: TimeInterval) async throws
+        -> (status: Int, body: Data)
+    {
+        let path = url.path()
+        paths.append("POST \(path)")
+        await Task.yield()
+        if hang { throw USBError.timedOut(route: path, seconds: Int(timeout)) }
+        guard path == "/upload" else { return (404, Data()) }
+        guard let part = Self.filePart(body, contentType: contentType) else { return (400, Data()) }
+        uploads.append(part)
+        switch uploadBehavior {
+        case .timeOut:
+            throw USBError.timedOut(route: path, seconds: Int(timeout))
+        case .status(let status):
+            return (status, Data())
+        case .accept, .acceptThenTimeOut:
+            let id = UUID().uuidString.lowercased()
+            let modified = clock().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: true))
+            let kind = (part.fileName as NSString).pathExtension
+            items.append(
+                USBItem(
+                    id: id,
+                    type: "DocumentType",
+                    fileType: kind == "rmdoc" ? "notebook" : kind,
+                    modifiedClient: modified,
+                    visibleName: nameForUpload(part.fileName, part.data)
+                )
+            )
+            if case .acceptThenTimeOut = uploadBehavior {
+                throw USBError.timedOut(route: path, seconds: Int(timeout))
+            }
+            return (201, Data(#"{"status":"Upload successful"}"#.utf8))
+        }
+    }
+
+    /// The `file` part of a multipart body.
+    static func filePart(_ body: Data, contentType: String) -> Upload? {
+        guard let range = contentType.range(of: "boundary=") else { return nil }
+        let boundary = Data("--\(contentType[range.upperBound...])".utf8)
+        let separator = Data("\r\n\r\n".utf8)
+        guard body.starts(with: boundary), let headerEnd = body.range(of: separator),
+            let end = body.range(of: Data("\r\n".utf8) + boundary + Data("--".utf8), options: .backwards)
+        else { return nil }
+        let headers = String(decoding: body[body.startIndex ..< headerEnd.lowerBound], as: UTF8.self)
+        guard headers.contains("name=\"file\""),
+            let name = headers.firstMatch(of: /filename="([^"]*)"/)?.1,
+            let type = headers.firstMatch(of: /Content-Type: ([^\r\n]*)/)?.1
+        else { return nil }
+        return Upload(
+            fileName: String(name),
+            contentType: String(type),
+            data: body[headerEnd.upperBound ..< end.lowerBound]
+        )
+    }
 
     func get(_ url: URL, timeout: TimeInterval) async throws -> (status: Int, body: Data) {
         let path = url.path()
