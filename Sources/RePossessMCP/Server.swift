@@ -8,7 +8,9 @@ public let serverInstructions = """
     and list_documents to browse folders; never guess a document id. \
     fetch_document returns typed text and PDF text as Markdown. \
     When the owner has configured a handwriting recognizer, it also returns handwriting as recognized text, \
-    labeled with the recognizer, and recognize_pages reads pages that wait; recognized text can have errors. \
+    labeled with the recognizer, and recognize_pages reads pages that wait. \
+    Recognized text can have errors, most often in names, rare words, and labels in drawings; \
+    fetch_page_image shows a page as it is. \
     Otherwise, look at handwriting with fetch_page_image or fetch_page_chunks; \
     each page's marker says which tool to call. \
     Pages are numbered from 1 in every tool. \

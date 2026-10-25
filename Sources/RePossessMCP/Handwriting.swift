@@ -129,11 +129,12 @@ extension RePossessTools {
     }
 
     /// The line that names who recognized the handwriting, with the provider and the model.
+    ///
+    /// The caution that recognized text can have errors is in the server's instructions only,
+    /// once: when every result repeated it, Claude opened every page image as well (phase 4).
     static func recognizerLine(_ configuration: RecognizerConfiguration, label: String) -> String {
         "Handwriting on these pages was recognized as text by \(label) "
-            + "(provider \(configuration.provider.rawValue), model \(configuration.keyModel)). "
-            + "Recognized text can have errors, most often in names, rare words, and labels in drawings; "
-            + "fetch_page_image shows a page as it is."
+            + "(provider \(configuration.provider.rawValue), model \(configuration.keyModel))."
     }
 
     /// The text of a page's handwriting, or a marker that says what to call.

@@ -234,7 +234,6 @@ public struct RePossessTools: Sendable {
                 Pages already read come from the cache at once; each new page takes a few seconds for each screen \
                 of handwriting. One call starts new pages for about \(Int(RecognitionContext.defaultBudgetSeconds)) seconds, \
                 and the result names the pages that remain. \
-                Recognized text can have errors; fetch_page_image shows a page as it is. \
                 Fails when recognition is off.
                 """,
             inputSchema: [

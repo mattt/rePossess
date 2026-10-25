@@ -89,8 +89,11 @@ func handwritingTools(
                 "Handwriting on these pages was recognized as text by Qwen3-VL 8B 4-bit (MLX, on this Mac)"
             )
         )
+        #expect(fetched.contains("(provider mlx, model mlx-community/Qwen3-VL-8B-Instruct-4bit@"))
         #expect(fetched.contains("Tomatoes along the south fence"))
         #expect(!fetched.contains("fetch_page_image with page_no 1 to see it.]"))
+        // The caution about errors is in the server's instructions, not in each result.
+        #expect(!fetched.contains("can have errors") && !read.contains("can have errors"))
 
         let search = try json(await call(tools, "search_documents", ["query": "tomatoes"]))
         let hits = search["results"] as! [[String: Any]]
@@ -224,6 +227,13 @@ func handwritingTools(
         guard case .text(let document, _, _) = fetched[0] else { Issue.record("no text"); return }
         #expect(document.contains("[Handwriting or a drawing without text. Call fetch_page_image with page_no 1"))
         #expect(!document.contains("recognize_pages"))
+    }
+
+    @Test func theCautionAboutErrorsIsInTheInstructionsOnce() {
+        #expect(serverInstructions.components(separatedBy: "can have errors").count == 2)
+        for tool in RePossessTools.all {
+            #expect(!(tool.description ?? "").contains("can have errors"), "\(tool.name)")
+        }
     }
 }
 
