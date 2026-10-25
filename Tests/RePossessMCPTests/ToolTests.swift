@@ -10,7 +10,7 @@ import Testing
 
 /// A library with invented documents: a typed notebook with a page of ink,
 /// a handwritten notebook, and a long typed notebook.
-func stockedTools() async throws -> ReadTools {
+func stockedTools(now: @escaping @Sendable () -> Date = Date.init) async throws -> ReadTools {
     let tablet = FakeTablet()
     var typed1 = PageBuilder()
     typed1.paragraphs = [StyledParagraph(.heading, "Seed order"), StyledParagraph(.plain, "Marigolds for the beds.")]
@@ -63,7 +63,8 @@ func stockedTools() async throws -> ReadTools {
             return [report]
         },
         usbConnected: { false },
-        cloudPaired: { true }
+        cloudPaired: { true },
+        now: now
     )
 }
 
@@ -193,7 +194,56 @@ func json(_ result: CallTool.Result) throws -> [String: Any] {
         #expect(await call(tools, "refresh_documents", ["source": "ftp"]).isError == true)
         let status = try json(await call(tools, "status"))
         #expect(status["documents"] as? Int == 3)
-        #expect((status["cloud"] as! [String: Any])["available"] as? Bool == true)
+        let cloud = status["cloud"] as! [String: Any]
+        #expect(cloud["available"] as? Bool == true && cloud["last_success"] == nil && cloud["last_error"] == nil)
+        let usb = status["usb"] as! [String: Any]
+        #expect(usb["last_success"] is String && usb["last_error"] == nil)
+        #expect((status["mirror"] as? [String: Any])?["source"] as? String == "usb")
+    }
+
+    @Test func resultsSayWhereTheMirrorCameFromAndHowOldItIs() async throws {
+        let tools = try await stockedTools(now: { Date().addingTimeInterval(3 * 3600 + 30) })
+        let list = try json(await call(tools, "list_documents"))
+        let mirror = try #require(list["mirror"] as? [String: Any])
+        #expect(mirror["source"] as? String == "usb" && mirror["age"] as? String == "3 hours")
+        #expect((mirror["age_seconds"] as? Int ?? 0) >= 3 * 3600)
+        #expect((list["documents"] as! [[String: Any]]).allSatisfy { $0["source"] as? String == "usb" })
+        let search = try json(await call(tools, "search_documents", ["query": "marigolds"]))
+        #expect((search["mirror"] as? [String: Any])?["age"] as? String == "3 hours")
+
+        let text = texts(await call(tools, "fetch_document", ["id": "doc-typed"]))[0]
+        #expect(text.contains("· copied from USB\nThe mirror was refreshed from USB 3 hours ago, at "))
+        let image = texts(await call(tools, "fetch_page_image", ["id": "doc-ink", "page_no": 1]))[0]
+        #expect(image.contains("Copied from USB. The mirror was refreshed from USB 3 hours ago"))
+        let chunks = await call(tools, "fetch_page_chunks", ["id": "doc-ink", "page_no": 1])
+        let object = try JSONSerialization.jsonObject(with: Data(texts(chunks).last!.utf8)) as! [String: Any]
+        #expect((object["mirror"] as? [String: Any])?["source"] as? String == "usb")
+        let overview = texts(await call(tools, "get_overview"))[0]
+        #expect(overview.contains("The mirror was refreshed from USB 3 hours ago"))
+    }
+
+    @Test func statusShowsAnErrorUntilALaterSuccess() async throws {
+        let tools = try await stockedTools()
+        try tools.library.recordRefreshFailure(.cloud, "invented cloud failure")
+        let failed = try json(await call(tools, "status"))
+        let cloud = failed["cloud"] as! [String: Any]
+        #expect(cloud["last_error"] as? String == "invented cloud failure" && cloud["last_error_at"] is String)
+        #expect(texts(await call(tools, "get_overview"))[0].contains("The last refresh from the cloud failed at "))
+
+        try tools.library.recordRefreshSuccess(.cloud)
+        let recovered = try json(await call(tools, "status"))
+        let after = recovered["cloud"] as! [String: Any]
+        #expect(after["last_error"] == nil && after["last_success"] is String)
+        #expect((recovered["mirror"] as? [String: Any])?["source"] as? String == "cloud")
+    }
+
+    @Test func agesInWords() {
+        #expect(ReadTools.ageText(seconds: 0) == "0 seconds")
+        #expect(ReadTools.ageText(seconds: 1) == "1 second")
+        #expect(ReadTools.ageText(seconds: 59) == "59 seconds")
+        #expect(ReadTools.ageText(seconds: 60) == "1 minute")
+        #expect(ReadTools.ageText(seconds: 7_300) == "2 hours")
+        #expect(ReadTools.ageText(seconds: 90_000) == "1 day")
     }
 }
 

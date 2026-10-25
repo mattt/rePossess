@@ -14,6 +14,12 @@ extension ReadTools {
         var out = "# reMarkable library\n\n"
         out += "\(status.documents) documents in \(status.folders) folders, \(status.pages) pages."
         out += " " + refreshSentence(status) + "\n"
+        for source in [Source.usb, .cloud] {
+            if let error = status.lastError[source] {
+                let when = status.lastErrorAt[source].map { " at \(Self.date($0))" } ?? ""
+                out += "\nThe last refresh from \(Self.sourceName(source)) failed\(when): \(error)\n"
+            }
+        }
         if documents.isEmpty {
             out += "\nThe library is empty. Call refresh_documents to read the tablet.\n"
             return Self.text(out)
@@ -42,11 +48,12 @@ extension ReadTools {
     }
 
     func refreshSentence(_ status: LibraryStatus) -> String {
-        var parts: [String] = []
-        if let usb = status.lastRefresh[.usb] { parts.append("over USB at \(Self.date(usb))") }
-        if let cloud = status.lastRefresh[.cloud] { parts.append("from the cloud at \(Self.date(cloud))") }
-        return parts.isEmpty
-            ? "The mirror has not been refreshed." : "Last refreshed \(parts.joined(separator: " and "))."
+        var sentence = mirrorSentence(status)
+        let others = status.lastRefresh.filter { $0.key != status.latestRefresh?.source }
+        for (source, date) in others {
+            sentence += " The last refresh from \(Self.sourceName(source)) finished at \(Self.date(date))."
+        }
+        return sentence
     }
 
     // MARK: list_documents
@@ -76,11 +83,14 @@ extension ReadTools {
         let summary: String
         let tags: [String]
         let page_tags: [PageTagEntry]
+        /// `usb` or `cloud`: where the mirror's copy of the document came from.
+        let source: String
     }
 
     struct ListResult: Codable {
         let folders: [FolderEntry]
         let documents: [DocumentEntry]
+        let mirror: MirrorEntry?
     }
 
     static func entry(_ item: LibraryItem) -> DocumentEntry {
@@ -94,7 +104,8 @@ extension ReadTools {
             content_status: item.contentStatus.rawValue,
             summary: item.error.map { "This document could not be read: \($0)" } ?? item.summary,
             tags: item.tags,
-            page_tags: item.pageTags.map { PageTagEntry(page_no: $0.pageNo, tag: $0.tag) }
+            page_tags: item.pageTags.map { PageTagEntry(page_no: $0.pageNo, tag: $0.tag) },
+            source: item.source.rawValue
         )
     }
 
@@ -108,7 +119,7 @@ extension ReadTools {
             item.kind == .document
                 && (tag == nil || item.tags.contains(tag!) || item.pageTags.contains { $0.tag == tag })
         }
-        return try Self.json(ListResult(folders: folders, documents: documents.map(Self.entry)))
+        return try Self.json(ListResult(folders: folders, documents: documents.map(Self.entry), mirror: try mirror()))
     }
 
     // MARK: search_documents
@@ -126,6 +137,7 @@ extension ReadTools {
         let query: String
         let total: Int
         let results: [SearchEntry]
+        let mirror: MirrorEntry?
     }
 
     func searchDocuments(_ arguments: [String: Value]) throws -> CallTool.Result {
@@ -143,7 +155,7 @@ extension ReadTools {
                 snippet: $0.snippet
             )
         }
-        return try Self.json(SearchResult(query: query, total: total, results: results))
+        return try Self.json(SearchResult(query: query, total: total, results: results, mirror: try mirror()))
     }
 
     // MARK: fetch_document
@@ -191,6 +203,7 @@ extension ReadTools {
         let requestedStart = try Self.integer(range, "start") ?? 1
         let requestedEnd = try Self.integer(range, "end")
 
+        let status = try library.status()
         var budget = Self.textBudget
         var blocks: [String] = []
         var returnedDocuments = 0
@@ -198,7 +211,9 @@ extension ReadTools {
         for document in documents {
             let pages = try library.pages(of: document.id)
             var block = "# \(document.name)\n\nid: \(document.id) · path: \(document.path) · "
-            block += "\(pages.count) pages · modified \(Self.date(document.modified))\n"
+            block += "\(pages.count) pages · modified \(Self.date(document.modified))"
+            block += " · copied from \(Self.sourceName(document.source))\n"
+            if blocks.isEmpty { block += mirrorSentence(status) + "\n" }
             if let error = document.error {
                 block += "\nThis document could not be read: \(error)\n"
             }
@@ -252,7 +267,8 @@ extension ReadTools {
         let scene = try loader.scene(document, page)
         let image = try PageRenderer.render(scene, maxWidth: Self.imageWidth, maxHeight: Self.imageHeight)
         var note = "\(document.name), page \(pageNo) of \(document.pageCount). "
-        note += "PNG, \(image.width) x \(image.height) pixels, \(image.png.count) bytes."
+        note += "PNG, \(image.width) x \(image.height) pixels, \(image.png.count) bytes. "
+        note += "Copied from \(Self.sourceName(document.source)). " + mirrorSentence(try library.status())
         let screens = scene.height / scene.screenHeight
         if screens > 1.05 {
             note += String(
@@ -283,6 +299,7 @@ extension ReadTools {
         let chunk_count: Int
         let chunks: [ChunkEntry]
         let next_idx: Int?
+        let mirror: MirrorEntry?
     }
 
     func fetchPageChunks(_ arguments: [String: Value]) throws -> CallTool.Result {
@@ -329,7 +346,8 @@ extension ReadTools {
             page_no: pageNo,
             chunk_count: count,
             chunks: chunks,
-            next_idx: last < count ? last : nil
+            next_idx: last < count ? last : nil,
+            mirror: try mirror()
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -358,6 +376,10 @@ extension ReadTools {
             out += "Refreshed from \(name) in \(String(format: "%.1f", report.seconds)) seconds: "
             out += "\(report.listed) documents, \(report.downloaded) downloaded, \(report.unchanged) unchanged, "
             out += "\(report.removed) removed, \(report.requests) requests.\n"
+            if report.keptNewer > 0 {
+                out += "\(report.keptNewer) documents were kept as they were, "
+                out += "because the mirror's copy is newer than the cloud's.\n"
+            }
             if !report.failed.isEmpty {
                 out += "\(report.failed.count) documents could not be read.\n"
             }
@@ -370,8 +392,11 @@ extension ReadTools {
 
     struct TransportStatus: Codable {
         let available: Bool
-        let last_refresh: String?
+        /// The last refresh from this source that finished.
+        let last_success: String?
+        /// The error of the last refresh from this source, if it failed after the last success.
         let last_error: String?
+        let last_error_at: String?
     }
 
     struct StatusResult: Codable {
@@ -381,30 +406,29 @@ extension ReadTools {
         let pages: Int
         let usb: TransportStatus
         let cloud: TransportStatus
-        let mirror_updated: String?
+        let mirror: MirrorEntry?
         let recognizer: String
     }
 
     func status() throws -> CallTool.Result {
         let status = try library.status()
-        let updated = status.lastRefresh.values.max()
+        func transport(_ source: Source, available: Bool) -> TransportStatus {
+            TransportStatus(
+                available: available,
+                last_success: status.lastRefresh[source].map { Self.date($0) },
+                last_error: status.lastError[source],
+                last_error_at: status.lastErrorAt[source].map { Self.date($0) }
+            )
+        }
         return try Self.json(
             StatusResult(
                 library: status.root.path,
                 documents: status.documents,
                 folders: status.folders,
                 pages: status.pages,
-                usb: TransportStatus(
-                    available: usbConnected(),
-                    last_refresh: status.lastRefresh[.usb].map { Self.date($0) },
-                    last_error: status.lastError[.usb]
-                ),
-                cloud: TransportStatus(
-                    available: cloudPaired(),
-                    last_refresh: status.lastRefresh[.cloud].map { Self.date($0) },
-                    last_error: status.lastError[.cloud]
-                ),
-                mirror_updated: updated.map { Self.date($0) },
+                usb: transport(.usb, available: usbConnected()),
+                cloud: transport(.cloud, available: cloudPaired()),
+                mirror: mirror(status),
                 recognizer: "none: handwriting recognition comes in phase 4; fetch_page_image shows handwriting"
             )
         )

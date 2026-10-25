@@ -27,6 +27,7 @@ public struct ReadTools: Sendable {
     let refresh: @Sendable (RefreshSource) async throws -> [RefreshReport]
     let usbConnected: @Sendable () -> Bool
     let cloudPaired: @Sendable () -> Bool
+    let now: @Sendable () -> Date
 
     /// The most text that one `fetch_document` call returns, in characters.
     /// About 7,500 tokens: under Claude Code's 10,000-token warning
@@ -45,13 +46,15 @@ public struct ReadTools: Sendable {
         library: Library,
         refresh: @escaping @Sendable (RefreshSource) async throws -> [RefreshReport],
         usbConnected: @escaping @Sendable () -> Bool = USBNetwork.isPresent,
-        cloudPaired: @escaping @Sendable () -> Bool = DeviceTokenKeychain.exists
+        cloudPaired: @escaping @Sendable () -> Bool = DeviceTokenKeychain.exists,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.library = library
         self.loader = PageLoader(library: library)
         self.refresh = refresh
         self.usbConnected = usbConnected
         self.cloudPaired = cloudPaired
+        self.now = now
     }
 
     // MARK: Schemas
@@ -93,7 +96,8 @@ public struct ReadTools: Sendable {
             title: "List documents",
             description: """
                 List the tablet's folders and documents, with each document's folder path, \
-                page count, modification time, text status, tags, and page tags.
+                page count, modification time, text status, tags, and page tags, \
+                and where the mirror came from and how old it is.
                 """,
             inputSchema: [
                 "type": "object",
@@ -225,8 +229,8 @@ public struct ReadTools: Sendable {
             name: "status",
             title: "Status",
             description: """
-                Report how rePossess reaches the tablet, when the mirror was last refreshed, \
-                the number of documents, and the handwriting recognizer.
+                Report how rePossess reaches the tablet, each source's last successful refresh and last error, \
+                the age of the mirror, the number of documents, and the handwriting recognizer.
                 """,
             inputSchema: ["type": "object", "properties": [:], "additionalProperties": false],
             annotations: readOnly
@@ -289,4 +293,52 @@ public struct ReadTools: Sendable {
     static let dateFormat = Date.ISO8601FormatStyle()
 
     static func date(_ date: Date?) -> String { date.map { dateFormat.format($0) } ?? "" }
+
+    // MARK: Mirror age
+
+    /// Where the mirror came from and how old it is, as tool results report it.
+    struct MirrorEntry: Codable, Equatable {
+        /// `usb` or `cloud`: the source of the most recent refresh that finished.
+        let source: String
+        /// When that refresh finished.
+        let refreshed: String
+        let age_seconds: Int
+        /// The age in words, such as "3 hours".
+        let age: String
+    }
+
+    static func sourceName(_ source: Source) -> String { source == .usb ? "USB" : "the cloud" }
+
+    /// An age in the largest whole unit, such as "45 seconds", "1 minute", or "3 days".
+    static func ageText(seconds: Int) -> String {
+        let units = [(86_400, "day"), (3_600, "hour"), (60, "minute"), (1, "second")]
+        let seconds = max(seconds, 0)
+        for (size, name) in units where seconds >= size {
+            let n = seconds / size
+            return "\(n) \(name)\(n == 1 ? "" : "s")"
+        }
+        return "0 seconds"
+    }
+
+    func mirror(_ status: LibraryStatus) -> MirrorEntry? {
+        guard let latest = status.latestRefresh else { return nil }
+        let age = Int(now().timeIntervalSince(latest.date).rounded(.down))
+        return MirrorEntry(
+            source: latest.source.rawValue,
+            refreshed: Self.date(latest.date),
+            age_seconds: max(age, 0),
+            age: Self.ageText(seconds: age)
+        )
+    }
+
+    func mirror() throws -> MirrorEntry? { mirror(try library.status()) }
+
+    /// A sentence such as "The mirror was refreshed from the cloud 3 hours ago, at ...".
+    func mirrorSentence(_ status: LibraryStatus) -> String {
+        guard let latest = status.latestRefresh, let entry = mirror(status) else {
+            return "The mirror has never been refreshed; call refresh_documents."
+        }
+        return
+            "The mirror was refreshed from \(Self.sourceName(latest.source)) \(entry.age) ago, at \(entry.refreshed)."
+    }
 }
