@@ -34,4 +34,17 @@ public enum DeviceTokenKeychain {
         }
         return String(decoding: data, as: UTF8.self)
     }
+
+    /// Whether the item exists. This reads the item's attributes, not the token,
+    /// so macOS does not ask for permission.
+    public static func exists() -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
 }

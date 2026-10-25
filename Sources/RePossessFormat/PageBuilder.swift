@@ -60,8 +60,8 @@ struct PageBuilder {
             blocks.insert(
                 SceneInfo(
                     currentLayer: LwwValue(CrdtId(0, 0), CrdtId(0, 11)),
-                    backgroundVisible: nil,
-                    rootDocumentVisible: nil,
+                    backgroundVisible: LwwValue(CrdtId(0, 0), true),
+                    rootDocumentVisible: LwwValue(CrdtId(0, 0), true),
                     paperSize: paperSize
                 ),
                 at: 2
@@ -158,8 +158,14 @@ struct DocumentBuilder {
             "cPages": ["pages": cPages], "tags": tags.map { ["name": $0, "timestamp": 1] },
         ]
         var files = [
-            ArchiveFile(name: "\(id).content", data: try JSONSerialization.data(withJSONObject: content)),
-            ArchiveFile(name: "\(id).metadata", data: try JSONSerialization.data(withJSONObject: metadata)),
+            ArchiveFile(
+                name: "\(id).content",
+                data: try JSONSerialization.data(withJSONObject: content, options: .sortedKeys)
+            ),
+            ArchiveFile(
+                name: "\(id).metadata",
+                data: try JSONSerialization.data(withJSONObject: metadata, options: .sortedKeys)
+            ),
         ]
         if let pdf { files.append(ArchiveFile(name: "\(id).pdf", data: pdf)) }
         for page in pages {
