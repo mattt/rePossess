@@ -18,8 +18,8 @@ public struct RootState: Sendable, Equatable, Codable {
 
 /// Builds the requests of the sync protocol as plain values.
 ///
-/// Phase 2 registers the device, renews the user token, reads the root, and downloads blobs.
-/// The write requests of spike 6 come back in phase 3.
+/// It registers the device, renews the user token, reads the root, downloads blobs,
+/// and, from phase 3, uploads blobs and updates the root, as spike 6 did.
 /// Each method cites the rmapi-js line it follows (commit 824f0ad).
 public struct RequestBuilder: Sendable {
     /// The host for tokens.
@@ -92,6 +92,56 @@ public struct RequestBuilder: Sendable {
             method: "GET",
             url: syncHost.appending(path: "sync/v3/files/\(hash)"),
             headers: ["Authorization": "Bearer \(userToken)", "rm-filename": fileName]
+        )
+    }
+
+    /// Uploads a blob under its hash.
+    ///
+    /// rmapi-js `src/raw.ts` lines 1266-1289: `PUT /sync/v3/files/<hash>`
+    /// with `rm-filename` and `x-goog-hash: crc32c=<base64>`.
+    /// The explicit `Content-Type` follows remarkable-mcp (`remarkable_mcp/sync.py`);
+    /// rmapi-js sends none, but URLSession may add a form type when none is set.
+    public func putFile(hash: String, fileName: String, body: Data, userToken: String) throws -> HTTPRequest {
+        guard ContentHash.isValid(hash) else { throw CloudError.invalidHash(hash) }
+        return HTTPRequest(
+            method: "PUT",
+            url: syncHost.appending(path: "sync/v3/files/\(hash)"),
+            headers: [
+                "Authorization": "Bearer \(userToken)",
+                "rm-filename": fileName,
+                "x-goog-hash": CRC32C.googHash(body),
+                "Content-Type": "application/octet-stream",
+            ],
+            body: body
+        )
+    }
+
+    /// Points the account at a new root index, if the generation still matches.
+    ///
+    /// rmapi-js `src/raw.ts` lines 1234-1264: `PUT /sync/v3/root`
+    /// with the JSON body `{"hash", "generation", "broadcast"}`.
+    /// The response has the new hash and generation.
+    /// The `rm-filename: roothash` header follows remarkable-mcp (`remarkable_mcp/sync.py`)
+    /// and the behavior of ddvk/rmapi (`api/sync15/blobstorage.go`); rmapi-js omits it.
+    /// Spike 6 sent this request once, live, on 2026-10-25, and the server answered 200.
+    public func putRoot(hash: String, generation: Int64, broadcast: Bool = true, userToken: String) throws
+        -> HTTPRequest
+    {
+        guard ContentHash.isValid(hash) else { throw CloudError.invalidHash(hash) }
+        struct Body: Encodable {
+            var hash: String
+            var generation: Int64
+            var broadcast: Bool
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return HTTPRequest(
+            method: "PUT",
+            url: syncHost.appending(path: "sync/v3/root"),
+            headers: [
+                "Authorization": "Bearer \(userToken)", "Content-Type": "application/json", "rm-filename": "roothash",
+            ],
+            body: try encoder.encode(Body(hash: hash, generation: generation, broadcast: broadcast))
         )
     }
 

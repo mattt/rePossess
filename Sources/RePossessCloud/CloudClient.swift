@@ -28,10 +28,26 @@ public struct CloudAuth: Sendable {
     }
 }
 
-/// Reads the sync store with a user token.
+/// What a push to the cloud did.
+public enum CloudPushOutcome: Sendable, Equatable {
+    /// The root lists the document: the root update succeeded, or a read after a lost answer found it.
+    case sent(generation: Int64?)
+    /// The root update got no answer, and the read of the root that followed failed too,
+    /// so whether the document is in the account is unknown.
+    case unknown(String)
+
+    /// Whether the root lists the document.
+    public var isSent: Bool {
+        if case .sent = self { return true }
+        return false
+    }
+}
+
+/// Reads the sync store with a user token, and adds new documents to it.
 ///
-/// It reads only: the root, indexes, and files.
-/// Nothing here writes to the account.
+/// It reads the root, indexes, and files.
+/// The one write is ``push(_:attempts:progress:)``, which adds a new document;
+/// nothing here changes or removes a document.
 public struct CloudClient: Sendable {
     let transport: any HTTPTransport
     let builder: RequestBuilder
@@ -85,6 +101,103 @@ public struct CloudClient: Sendable {
         let response = try await transport.send(builder.getFile(hash: hash, fileName: fileName, userToken: userToken))
         guard (200 ..< 300).contains(response.status) else { throw CloudError.from(response) }
         return response.body
+    }
+
+    /// Reads the root and its index, and checks the index's hash.
+    public func rootIndex() async throws -> (root: RootState, index: SyncIndex) {
+        let root = try await root()
+        let fetched = try await index(id: "root", hash: root.hash)
+        guard fetched.hashMatches else {
+            throw CloudError.hashMismatch(expected: root.hash, actual: (try? fetched.index.hash()) ?? "")
+        }
+        return (root, fetched.index)
+    }
+
+    /// Whether the account's root lists a document.
+    public func contains(documentID: String) async throws -> Bool {
+        try await rootIndex().index.entries.contains { $0.id == documentID }
+    }
+
+    /// Adds a new document to the top level of the account.
+    ///
+    /// It reads the root, plans the upload in the account's schema, uploads every blob,
+    /// and then updates the root with the generation that it read.
+    /// When the root changed in between (``CloudError/generationConflict``),
+    /// the account is unchanged apart from blobs that no index names,
+    /// so it reads the root again and plans again, up to `attempts` times.
+    ///
+    /// No write is ever sent twice after a lost answer.
+    /// When the root update gets no answer, or HTTP 429 or a 5xx status,
+    /// it reads the root again and looks for the document's ID,
+    /// because the update may have happened (rmapi-js `src/index.ts` lines 776-783).
+    /// rePossess chooses the document ID, so a later push of the same document
+    /// finds it in the root and stops there.
+    ///
+    /// - Returns: ``CloudPushOutcome/sent(generation:)`` when the root lists the document,
+    ///   or ``CloudPushOutcome/unknown(_:)`` when neither the update nor the check that followed answered.
+    /// - Throws: An error when the document was not added: a refused plan, a refused blob,
+    ///   a refused root update, a generation conflict on every attempt,
+    ///   or ``CloudError/rootUpdateNotApplied(_:)``.
+    public func push(
+        _ document: NewDocument,
+        attempts: Int = 3,
+        progress: @Sendable (String) -> Void = { _ in }
+    ) async throws -> CloudPushOutcome {
+        for attempt in 1 ... max(attempts, 1) {
+            let (root, index) = try await rootIndex()
+            if index.entries.contains(where: { $0.id == document.documentID }) {
+                progress("The cloud root already lists \(document.documentID).")
+                return .sent(generation: root.generation)
+            }
+            let plan = try UploadPlanner.plan(document, root: root, rootIndex: index)
+            for put in plan.blobPuts {
+                let response = try await transport.send(
+                    builder.putFile(hash: put.hash, fileName: put.fileName, body: put.body, userToken: userToken)
+                )
+                guard (200 ..< 300).contains(response.status) else { throw CloudError.from(response) }
+                progress("PUT \(put.fileName), \(put.body.count) bytes: HTTP \(response.status)")
+            }
+            let request = try builder.putRoot(
+                hash: plan.newRootHash,
+                generation: plan.baseGeneration,
+                userToken: userToken
+            )
+            let response: HTTPResponse
+            do {
+                response = try await transport.send(request)
+            } catch {
+                return try await check(document.documentID, after: "\(error)", progress: progress)
+            }
+            if (200 ..< 300).contains(response.status) {
+                progress("PUT /sync/v3/root from generation \(plan.baseGeneration): HTTP \(response.status)")
+                let state = try? JSONDecoder().decode(RootState.self, from: response.body)
+                return .sent(generation: state?.generation)
+            }
+            if response.status == 429 || (500 ..< 600).contains(response.status) {
+                return try await check(document.documentID, after: "HTTP \(response.status)", progress: progress)
+            }
+            let error = CloudError.from(response)
+            guard error == .generationConflict, attempt < attempts else { throw error }
+            progress("The cloud root changed during the upload; planning again.")
+        }
+        throw CloudError.generationConflict
+    }
+
+    /// After a root update without an answer, reads the root and looks for the document.
+    private func check(
+        _ documentID: String,
+        after reason: String,
+        progress: @Sendable (String) -> Void
+    ) async throws -> CloudPushOutcome {
+        progress("The root update got no answer (\(reason)); reading the root to look for \(documentID).")
+        let found: Bool
+        do {
+            found = try await contains(documentID: documentID)
+        } catch {
+            return .unknown("the root update got no answer (\(reason)), and the root could not be read: \(error)")
+        }
+        guard found else { throw CloudError.rootUpdateNotApplied(reason) }
+        return .sent(generation: nil)
     }
 }
 

@@ -105,7 +105,7 @@ public struct SyncIndex: Sendable, Equatable {
         }
     }
 
-    /// Makes an index to upload. Phase 3 uploads; phase 1 uses this only in tests.
+    /// Makes an index to upload.
     ///
     /// It sorts the entries by the bytes of their IDs,
     /// which the server requires of the root since 2026-08-17 (ddvk/rmapi issue 75).

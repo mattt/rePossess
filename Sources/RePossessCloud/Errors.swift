@@ -33,6 +33,13 @@ public enum CloudError: Error, Equatable, CustomStringConvertible {
     case alreadyPaired(service: String)
     /// The server refused to register the device.
     case registrationRefused(status: Int, message: String)
+    /// The root changed between the read and the update, so the update did not happen.
+    case generationConflict
+    /// An upload could not be planned, so nothing was sent.
+    case invalidUpload(String)
+    /// The root update got no answer, and a new read of the root does not list the document,
+    /// so the update did not happen.
+    case rootUpdateNotApplied(String)
 
     public var description: String {
         switch self {
@@ -60,11 +67,21 @@ public enum CloudError: Error, Equatable, CustomStringConvertible {
         case .registrationRefused(let status, let message):
             "reMarkable refused the one-time code (HTTP \(status): \(message)). "
                 + "Get a new code from \(CloudHosts.connectPage.absoluteString) and try again."
+        case .generationConflict: "the cloud root changed during the upload; read the root again and plan again"
+        case .invalidUpload(let reason): "cannot plan the upload: \(reason)"
+        case .rootUpdateNotApplied(let reason):
+            "the root update got no answer (\(reason)), and the cloud root does not list the document"
         }
     }
 
     /// Maps a failed response to an error.
+    ///
+    /// A generation conflict on a root update is HTTP 412 in rmfakecloud and ddvk/rmapi,
+    /// and the body `{"message":"precondition failed"}` in rmapi-js (`src/index.ts` line 808).
     static func from(_ response: HTTPResponse) -> CloudError {
+        if response.status == 412 || response.text.contains("precondition failed") {
+            return .generationConflict
+        }
         if response.status == 401 || response.status == 403 {
             return .unauthorized(status: response.status)
         }

@@ -332,6 +332,8 @@ actor Refusing: HTTPTransport {
         _ = try await client.file(entries[0])
         _ = try await client.file(entries[1])
         // The token response spent the token limit, and each file response spent the file limit.
+        // The last pause starts in its own task after the response, so wait for it to record.
+        for _ in 0 ..< 100 where await recorder.waits.count < 3 { try await Task.sleep(for: .milliseconds(10)) }
         #expect(await recorder.waits == [.seconds(2), .seconds(2), .seconds(2)])
         #expect(await session.usage().waits == 3)
     }
