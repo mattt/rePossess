@@ -279,5 +279,6 @@ struct ConfigPreview: View {
         }
         .padding()
         .frame(minWidth: 560, idealWidth: 680, minHeight: 420, idealHeight: 560)
+        .scrollDisabled(false)
     }
 }

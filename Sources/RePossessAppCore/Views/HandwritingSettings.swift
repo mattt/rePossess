@@ -238,6 +238,7 @@ struct RecognizerSetupSheet: View {
             .padding()
         }
         .frame(width: 540, height: 560)
+        .scrollDisabled(false)
         .defaultFocus($focus, draft.showsModel ? .model : nil)
         // A new provider or address needs a new consent, even when the owner changes it back.
         .onChange(of: draftDestination) { _, destination in consent.draftChanged(to: destination) }

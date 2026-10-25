@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// Every pane shows results the same way: a symbol with the text, so that color is not the only sign,
 /// and an error's full text behind a "Details" disclosure.
-struct Notice: Equatable, Identifiable {
+struct Notice: Equatable {
     enum Kind: Equatable {
         case done, failed, info
     }
@@ -13,9 +13,6 @@ struct Notice: Equatable, Identifiable {
     var text: String
     /// The full technical text, such as an error's description.
     var details: String?
-
-    /// The notice's identity in a list: its error when it has one, so that an age in its text can change.
-    var id: String { details ?? text }
 
     static func done(_ text: String) -> Notice { Notice(kind: .done, text: text) }
     static func info(_ text: String) -> Notice { Notice(kind: .info, text: text) }

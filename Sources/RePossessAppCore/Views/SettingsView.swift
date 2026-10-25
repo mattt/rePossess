@@ -44,6 +44,8 @@ struct SettingsPaneSize: ViewModifier {
     @State private var height: CGFloat = SettingsLayout.minimumHeight
 
     func body(content: Content) -> some View {
+        // The form does not scroll on its own, so that it reports its full height; the pane scrolls instead.
+        // Sheets inherit the environment, so each sheet turns scrolling on again.
         ScrollView {
             content
                 .scrollDisabled(true)
@@ -99,7 +101,10 @@ struct GeneralSettings: View {
                         Text("Refreshing…").foregroundStyle(.secondary)
                     }
                 }
-                ForEach(model.refreshNotices) { NoticeView(notice: $0, persistent: true) }
+                // At most one notice for each source, in a fixed order.
+                ForEach(Array(model.refreshNotices.enumerated()), id: \.offset) {
+                    NoticeView(notice: $0.element, persistent: true)
+                }
             } header: {
                 Text("Refresh")
             } footer: {
