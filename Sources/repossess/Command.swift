@@ -4,6 +4,7 @@ import RePossessCloud
 import RePossessFormat
 import RePossessLibrary
 import RePossessMCP
+import RePossessRecognize
 import RePossessRender
 import RePossessUSB
 
@@ -27,6 +28,24 @@ let usage = """
                                   Send a PDF or EPUB.
       pushes                      List the queue of pushes and what happened to each.
       drop-push <id>              Remove a push that has not been sent.
+
+    Commands for handwriting (off until you set a recognizer):
+      recognizer show             Show the recognizer, where page images go, and how many pages it has read.
+      recognizer set <provider> [--model <name>] [--base-url <url>] [--model-path <folder>] [--send-page-images]
+                                  Choose a recognizer: mlx or foundation-models on this Mac; anthropic, openai,
+                                  or gemini with an API key; ollama; or client, through MCP sampling.
+                                  A provider off this Mac needs --send-page-images, because each page with
+                                  handwriting goes to it as an image.
+      recognizer off              Turn recognition off. The cache stays.
+      recognizer key <provider>   Keep an API key for anthropic, openai, or gemini in the login keychain;
+                                  reads it from standard input. Environment variables come first.
+      recognizer eval <reference-dir> [--images <strips-dir>] [--provider <name> ...] [--out <file.json>]
+                                  Score a recognizer against reference transcriptions: WER, CER, word recall.
+      recognize [<id>] [--pages <n | a-b>] [--again]
+                                  Read the handwriting that the cache does not have yet.
+      model status                Where the pinned MLX model is, if it is on this Mac.
+      model download              Download the pinned MLX model (5.8 GB) from Hugging Face and check its hashes.
+      model verify                Check the SHA-256 of every file of the model in use.
 
     Commands for the cloud:
       pair                        Pair with your reMarkable account. Reads a one-time code from
@@ -61,7 +80,10 @@ struct Arguments {
     var options: [String: String] = [:]
     var flags: Set<String> = []
 
-    static let valued: Set<String> = ["--library", "--out", "--scale", "--rmdoc", "--title"]
+    static let valued: Set<String> = [
+        "--library", "--out", "--scale", "--rmdoc", "--title", "--model", "--base-url", "--model-path", "--images",
+        "--provider", "--pages", "--limit",
+    ]
 
     init(_ arguments: [String]) throws {
         guard let first = arguments.first else { throw UsageError(usage) }
@@ -244,6 +266,15 @@ struct Repossess {
                 counts[status].map { "\($0) \(status.rawValue)" }
             }
             print("Pushes: \(queue.isEmpty ? "none" : queue.joined(separator: ", "))")
+            if let configuration = try RecognizerConfiguration.activate(in: library) {
+                let counts = try library.recognitionCounts(key: configuration.key)
+                print(
+                    "Recognizer: \(configuration.label); page images go to \(configuration.destination); "
+                        + "\(counts.text + counts.empty) of \(counts.pagesWithInk) pages with handwriting read"
+                )
+            } else {
+                print("Recognizer: off")
+            }
 
         case "list":
             let library = try Library(root: libraryRoot(arguments))
@@ -263,6 +294,7 @@ struct Repossess {
             // No one watches the server, so it waits at most 20 seconds for a Keychain dialog.
             let session = CloudSession(tokenTimeout: .seconds(20))
             let paths = Pusher.availablePaths(session: session)
+            let sampling = ClientSampling()
             let tools = RePossessTools(
                 library: library,
                 refresh: { source in
@@ -274,9 +306,10 @@ struct Repossess {
                         progress: { printError($0) }
                     )
                 },
-                pusher: Pusher(library: library, paths: paths, progress: { printError($0) })
+                pusher: Pusher(library: library, paths: paths, progress: { printError($0) }),
+                recognition: .live(library: library, sampler: sampling)
             )
-            try await serveMCP(tools: tools, version: version)
+            try await serveMCP(tools: tools, version: version, sampling: sampling)
 
         case "push-markdown":
             guard arguments.positional.count == 1, let title = arguments.options["--title"] else {
@@ -422,6 +455,15 @@ struct Repossess {
             ]
             let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
             print(String(decoding: data, as: UTF8.self))
+
+        case "recognizer":
+            try await recognizerCommand(arguments)
+
+        case "recognize":
+            try await recognizeCommand(arguments)
+
+        case "model":
+            try await modelCommand(arguments)
 
         case "help", "--help", "-h":
             print(usage)
