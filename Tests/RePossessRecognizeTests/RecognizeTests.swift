@@ -379,6 +379,21 @@ final class FakeFetcher: RangeFetcher, @unchecked Sendable {
         #expect(again.offsets.isEmpty)
     }
 
+    @Test func reportsTheBytesForAProgressBar() async throws {
+        let store = store()
+        let fetcher = FakeFetcher(["config.json": config, "model.safetensors": weights])
+        let counts = Lines()
+        _ = try await store.download(
+            fetcher: fetcher,
+            progress: { _ in },
+            bytes: { done, total in counts.add("\(done)/\(total)") }
+        )
+        let total = model.totalBytes
+        #expect(counts.all.last == "\(total)/\(total)")
+        let done = counts.all.compactMap { Int64($0.split(separator: "/")[0]) }
+        #expect(done == done.sorted() && !done.isEmpty)
+    }
+
     @Test func continuesAPartialFile() async throws {
         let store = store()
         await #expect(throws: RecognizerError.self) {

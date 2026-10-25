@@ -215,9 +215,13 @@ public struct ModelStore: Sendable {
     /// when the server honors the range; otherwise it starts again.
     /// A file whose hash differs is deleted, and the download stops with an error.
     /// Call it only when the owner starts the download.
+    /// - Parameters:
+    ///   - progress: Receives a line at each file and at about every 5 percent.
+    ///   - bytes: Receives the bytes that are on the Mac and the model's total, for a progress bar.
     public func download(
         fetcher: any RangeFetcher = URLSessionRangeFetcher(),
-        progress: @escaping @Sendable (String) -> Void
+        progress: @escaping @Sendable (String) -> Void,
+        bytes: @escaping @Sendable (_ done: Int64, _ total: Int64) -> Void = { _, _ in }
     ) async throws -> URL {
         let folder = libraryFolder
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -228,6 +232,7 @@ public struct ModelStore: Sendable {
             if size(target) == file.bytes, try Self.sha256(target) == file.sha256 {
                 done += file.bytes
                 progress("\(file.name): already here")
+                bytes(done, total)
                 continue
             }
             try? FileManager.default.removeItem(at: target)
@@ -244,7 +249,13 @@ public struct ModelStore: Sendable {
                 let handle = try FileHandle(forWritingTo: part)
                 try handle.seekToEnd()
                 let start = done + offset
-                let reporter = ProgressReporter(name: file.name, total: total, start: start, report: progress)
+                let reporter = ProgressReporter(
+                    name: file.name,
+                    total: total,
+                    start: start,
+                    report: progress,
+                    bytes: bytes
+                )
                 if offset > 0 { progress("\(file.name): continuing at \(offset) of \(file.bytes) bytes") }
                 do {
                     try await fetcher.fetch(model.url(file), from: offset, into: handle) { reporter.add($0) }
@@ -271,6 +282,7 @@ public struct ModelStore: Sendable {
             try FileManager.default.moveItem(at: part, to: target)
             done += file.bytes
             progress("\(file.name): checked")
+            bytes(done, total)
         }
         return folder
     }
@@ -283,30 +295,47 @@ final class ProgressReporter: @unchecked Sendable {
     private let total: Int64
     private var received: Int64
     private var lastPercent: Int
+    private var lastBytes: Int64 = 0
     private let report: @Sendable (String) -> Void
+    private let bytes: @Sendable (Int64, Int64) -> Void
 
-    init(name: String, total: Int64, start: Int64, report: @escaping @Sendable (String) -> Void) {
+    init(
+        name: String,
+        total: Int64,
+        start: Int64,
+        report: @escaping @Sendable (String) -> Void,
+        bytes: @escaping @Sendable (Int64, Int64) -> Void = { _, _ in }
+    ) {
         self.name = name
         self.total = max(total, 1)
         self.received = start
         self.lastPercent = Int(start * 100 / max(total, 1))
         self.report = report
+        self.bytes = bytes
     }
 
-    func add(_ bytes: Int64) {
-        let line: String? = lock.withLock {
-            received += bytes
+    func add(_ count: Int64) {
+        let (line, now): (String?, Int64?) = lock.withLock {
+            received += count
+            // The byte count goes out at about every 0.2 percent, so that a progress bar moves smoothly.
+            var now: Int64? = nil
+            if received - lastBytes >= total / 500 || received >= total {
+                lastBytes = received
+                now = received
+            }
             let percent = Int(received * 100 / total)
-            guard percent >= lastPercent + 5 else { return nil }
+            guard percent >= lastPercent + 5 else { return (nil, now) }
             lastPercent = percent
-            return String(
+            let line = String(
                 format: "%d%%: %.2f of %.2f GB (%@)",
                 percent,
                 Double(received) / 1e9,
                 Double(total) / 1e9,
                 name
             )
+            return (line, now)
         }
+        if let now { bytes(now, total) }
         if let line { report(line) }
     }
 }
