@@ -88,7 +88,7 @@ func json(_ result: CallTool.Result) throws -> [String: Any] {
         #expect(
             RePossessTools.all.map(\.name) == [
                 "get_overview", "list_documents", "search_documents", "fetch_document", "fetch_page_image",
-                "fetch_page_chunks", "refresh_documents", "push_markdown", "push_file", "status",
+                "fetch_page_chunks", "recognize_pages", "refresh_documents", "push_markdown", "push_file", "status",
             ]
         )
         for tool in RePossessTools.all {

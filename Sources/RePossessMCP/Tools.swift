@@ -3,6 +3,7 @@ import MCP
 import RePossessCloud
 import RePossessFormat
 import RePossessLibrary
+import RePossessRecognize
 import RePossessRender
 import RePossessUSB
 
@@ -15,7 +16,7 @@ public enum RefreshSource: String, Sendable {
 }
 
 /// The tools, with the schemas and rules of the design's "MCP tools" section (spike 7):
-/// the read tools, and from phase 3 `push_markdown` and `push_file`.
+/// the read tools, from phase 3 `push_markdown` and `push_file`, and from phase 4 `recognize_pages`.
 ///
 /// - Pages are numbered from 1 in every tool.
 /// - A result with `structuredContent` has the same JSON as its only text;
@@ -31,6 +32,8 @@ public struct RePossessTools: Sendable {
     let now: @Sendable () -> Date
     /// Queues and sends pushes; `nil` turns the push tools off.
     let pusher: Pusher?
+    /// The handwriting recognizer, when the owner configures one.
+    let recognition: RecognitionContext
 
     /// The most text that one `fetch_document` call returns, in characters.
     /// About 7,500 tokens: under Claude Code's 10,000-token warning
@@ -51,9 +54,11 @@ public struct RePossessTools: Sendable {
         usbConnected: @escaping @Sendable () -> Bool = USBNetwork.isPresent,
         cloudPaired: @escaping @Sendable () -> Bool = DeviceTokenKeychain.exists,
         now: @escaping @Sendable () -> Date = Date.init,
-        pusher: Pusher? = nil
+        pusher: Pusher? = nil,
+        recognition: RecognitionContext? = nil
     ) {
         self.pusher = pusher
+        self.recognition = recognition ?? .live(library: library)
         self.library = library
         self.loader = PageLoader(library: library)
         self.refresh = refresh
@@ -128,7 +133,8 @@ public struct RePossessTools: Sendable {
                 Search document names, tags, and text for words. Every word must appear in a page; \
                 case and accents are ignored, and a word matches the start of a longer word. \
                 Each result has the page number of the match and a snippet. \
-                Handwriting is not searchable yet.
+                match is handwriting when the words are in handwriting that the owner's recognizer read as text; \
+                handwriting that has not been recognized is not searchable.
                 """,
             inputSchema: [
                 "type": "object",
@@ -150,8 +156,11 @@ public struct RePossessTools: Sendable {
             title: "Fetch document text",
             description: """
                 Return documents as Markdown, page by page. Give exactly one of id or ids. \
-                Pages are numbered from 1. A page with handwriting or drawings says so; \
-                call fetch_page_image to see it. One call returns at most \(textBudget) characters; \
+                Pages are numbered from 1. When the owner has configured a handwriting recognizer, \
+                handwriting that it has read comes as text, labeled with the recognizer; \
+                otherwise a page with handwriting or drawings says so and names the tool to call: \
+                fetch_page_image to see it, or recognize_pages to read it as text. \
+                One call returns at most \(textBudget) characters; \
                 when it stops early, the result names the next pages to ask for.
                 """,
             inputSchema: [
@@ -215,6 +224,38 @@ public struct RePossessTools: Sendable {
                 "additionalProperties": false,
             ],
             annotations: readOnly
+        ),
+        Tool(
+            name: "recognize_pages",
+            title: "Recognize handwriting",
+            description: """
+                Read the handwriting on a document's pages as text, with the recognizer that the owner configured, \
+                and keep the text, so that fetch_document and search_documents include it. \
+                Pages already read come from the cache at once; each new page takes a few seconds for each screen \
+                of handwriting. One call starts new pages for about \(Int(RecognitionContext.defaultBudgetSeconds)) seconds, \
+                and the result names the pages that remain. \
+                Recognized text can have errors; fetch_page_image shows a page as it is. \
+                Fails when recognition is off.
+                """,
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "id": idProperty,
+                    "pages": [
+                        "type": "object",
+                        "description":
+                            "The pages to read, from start to end inclusive, numbered from 1. Out-of-range values are clamped. Omit for the whole document.",
+                        "properties": [
+                            "start": ["type": "integer", "minimum": 1],
+                            "end": ["type": "integer", "minimum": 1],
+                        ],
+                        "additionalProperties": false,
+                    ],
+                ],
+                "required": ["id"],
+                "additionalProperties": false,
+            ],
+            annotations: Tool.Annotations(readOnlyHint: true, openWorldHint: true)
         ),
         Tool(
             name: "refresh_documents",
@@ -326,13 +367,14 @@ public struct RePossessTools: Sendable {
             case "get_overview": return try overview(arguments)
             case "list_documents": return try listDocuments(arguments)
             case "search_documents": return try searchDocuments(arguments)
-            case "fetch_document": return try fetchDocument(arguments)
+            case "fetch_document": return try await fetchDocument(arguments)
+            case "recognize_pages": return try await recognizePages(arguments)
             case "fetch_page_image": return try fetchPageImage(arguments)
             case "fetch_page_chunks": return try fetchPageChunks(arguments)
             case "refresh_documents": return try await refreshDocuments(arguments)
             case "push_markdown": return try await pushMarkdown(arguments)
             case "push_file": return try await pushFile(arguments)
-            case "status": return try status()
+            case "status": return try await status()
             default: throw ToolError("Unknown tool \(params.name).")
             }
         } catch let error as ToolError {

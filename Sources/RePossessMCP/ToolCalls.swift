@@ -168,32 +168,19 @@ extension RePossessTools {
 
     // MARK: fetch_document
 
-    /// The marker line for a page that has more than its text shows.
-    /// Handwriting recognition comes in phase 4; until then the client looks at the image.
-    static func marker(_ page: LibraryPage) -> String? {
-        let n = page.number
-        if page.needsImage, !page.hasText {
-            return page.strokeCount > 0
-                ? "[Handwriting or a drawing without text. Call fetch_page_image with page_no \(n) to see it.]"
-                : "[A PDF page without a text layer. Call fetch_page_image with page_no \(n) to see it.]"
-        }
-        if page.needsImage {
-            return "[This page also has handwriting or drawings. Call fetch_page_image with page_no \(n) to see them.]"
-        }
-        return nil
-    }
-
-    static func pageBody(_ page: LibraryPage) -> String {
+    /// A page's text, and its handwriting as recognized text or as a marker that names the tool to call.
+    static func pageBody(_ page: LibraryPage, _ handwriting: PageHandwriting = .notShown, documentID: String) -> String
+    {
         var parts: [String] = []
         if page.hasText { parts.append(page.markdown) }
-        if let marker = marker(page) { parts.append(marker) }
+        if let part = handwritingPart(page, handwriting, documentID: documentID) { parts.append(part) }
         if !page.warnings.isEmpty {
             parts.append("[Part of this page could not be read; fetch_page_image shows what rePossess could draw.]")
         }
         return parts.isEmpty ? "[Blank page.]" : parts.joined(separator: "\n\n")
     }
 
-    func fetchDocument(_ arguments: [String: Value]) throws -> CallTool.Result {
+    func fetchDocument(_ arguments: [String: Value]) async throws -> CallTool.Result {
         let ids: [String]
         switch (Self.string(arguments, "id"), arguments["ids"]?.arrayValue) {
         case (let id?, nil):
@@ -212,6 +199,7 @@ extension RePossessTools {
         let requestedEnd = try Self.integer(range, "end")
 
         let status = try library.status()
+        let configuration = await shownConfiguration()
         var budget = Self.textBudget
         var blocks: [String] = []
         var returnedDocuments = 0
@@ -233,9 +221,15 @@ extension RePossessTools {
             let count = pages.count
             let start = min(max(requestedStart, 1), count)
             let end = min(max(requestedEnd ?? count, start), count)
+            let states = try pages[(start - 1) ..< end].map { try handwriting($0, configuration) }
+            let label = states.lazy.compactMap { state -> String? in
+                if case .recognized(let r) = state, r.status == .text { return r.label }
+                return nil
+            }.first
+            if let configuration, let label { block += Self.recognizerLine(configuration, label: label) + "\n" }
             var nextPage: Int?
             for pageNo in start ... end {
-                let body = Self.pageBody(pages[pageNo - 1])
+                let body = Self.pageBody(pages[pageNo - 1], states[pageNo - start], documentID: document.id)
                 // Always return at least one page, even when it alone is over the budget.
                 if returnedPages > 0, body.count > budget {
                     nextPage = pageNo
@@ -465,7 +459,7 @@ extension RePossessTools {
         let mirror: MirrorEntry?
         /// The pushes in each state: `queued`, `unknown`, `sent`, and `failed`.
         let pushes: [String: Int]
-        let recognizer: String
+        let recognizer: RecognizerStatus
     }
 
     func pushCounts() throws -> [String: Int] {
@@ -483,7 +477,7 @@ extension RePossessTools {
         return counts
     }
 
-    func status() throws -> CallTool.Result {
+    func status() async throws -> CallTool.Result {
         let status = try library.status()
         func transport(_ source: Source, available: Bool) -> TransportStatus {
             TransportStatus(
@@ -503,7 +497,7 @@ extension RePossessTools {
                 cloud: transport(.cloud, available: cloudPaired()),
                 mirror: mirror(status),
                 pushes: pushCounts(),
-                recognizer: "none: handwriting recognition comes in phase 4; fetch_page_image shows handwriting"
+                recognizer: await recognizerStatus()
             )
         )
     }
