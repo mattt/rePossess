@@ -16,6 +16,8 @@ let package = Package(
         .library(name: "RePossessRecognize", targets: ["RePossessRecognize"]),
         .library(name: "RePossessMCP", targets: ["RePossessMCP"]),
         .executable(name: "repossess", targets: ["repossess"]),
+        // The menu bar app's executable; `mise run build:app` puts it in rePossess.app with `repossess`.
+        .executable(name: "RePossessApp", targets: ["RePossessApp"]),
     ],
     dependencies: [
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1"),
@@ -73,6 +75,17 @@ let package = Package(
                 "RePossessMCP",
             ]
         ),
+        .target(
+            name: "RePossessAppCore",
+            dependencies: [
+                "RePossessCloud",
+                "RePossessUSB",
+                "RePossessLibrary",
+                "RePossessRecognize",
+                "RePossessMCP",
+            ]
+        ),
+        .executableTarget(name: "RePossessApp", dependencies: ["RePossessAppCore"]),
         .testTarget(name: "RePossessFormatTests", dependencies: ["RePossessFormat"], exclude: ["Fixtures"]),
         .testTarget(name: "RePossessCloudTests", dependencies: ["RePossessCloud"]),
         .testTarget(name: "RePossessUSBTests", dependencies: ["RePossessUSB"]),
@@ -94,6 +107,17 @@ let package = Package(
                 "RePossessUSB",
                 "RePossessRecognize",
                 .product(name: "MCP", package: "swift-sdk"),
+            ]
+        ),
+        .testTarget(
+            name: "RePossessAppCoreTests",
+            dependencies: [
+                "RePossessAppCore",
+                "RePossessLibrary",
+                "RePossessCloud",
+                "RePossessUSB",
+                "RePossessRecognize",
+                "RePossessMCP",
             ]
         ),
     ]
