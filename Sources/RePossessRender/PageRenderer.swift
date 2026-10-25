@@ -69,7 +69,9 @@ public struct PageScene {
         warnings = result?.warnings ?? []
 
         var size = Self.defaultSize
-        if let paper = result?.tree.sceneInfo?.paperSize, paper.0 > 0, paper.1 > 0 {
+        if let pdfPage, let pdfSize = Self.pdfSize(pdfPage) {
+            size = pdfSize
+        } else if let paper = result?.tree.sceneInfo?.paperSize, paper.0 > 0, paper.1 > 0 {
             size = CGSize(width: CGFloat(paper.0), height: CGFloat(paper.1))
         }
         width = size.width
@@ -144,16 +146,29 @@ public struct PageScene {
         return 0
     }
 
-    /// Where the PDF page goes: scaled to the page width, at the top.
-    /// That the tablet places a PDF page this way is checked in docs/phase-1.md.
-    func pdfFrame(_ page: CGPDFPage) -> CGRect {
+    /// Tablet pixels per PDF point on a PDF page.
+    ///
+    /// The Paper Pure's PDF export of an annotated PDF (2026-10-25) draws each page at its own size,
+    /// and its strokes land where the stroke coordinates put them at 227/72 pixels per point,
+    /// with x 0 at the center of the page and y 0 at its top
+    /// (a fit of 25 strokes gave 0.3166 points per pixel, an x offset of 306.2 points
+    /// on a 612-point page, and a y offset of -0.3 points).
+    /// Its notebook pages use the same scale: 1404 pixels are 445 points.
+    public static let pdfPixelsPerPoint: CGFloat = 227 / 72
+
+    /// The size of a PDF page in tablet pixels, after its rotation.
+    static func pdfSize(_ page: CGPDFPage) -> CGSize? {
         let box = page.getBoxRect(.cropBox)
         let rotated = page.rotationAngle % 180 != 0
-        let pdfWidth = rotated ? box.height : box.width
-        let pdfHeight = rotated ? box.width : box.height
-        guard pdfWidth > 0 else { return .zero }
-        let scale = width / pdfWidth
-        return CGRect(x: 0, y: 0, width: width, height: pdfHeight * scale)
+        let size = rotated ? CGSize(width: box.height, height: box.width) : box.size
+        guard size.width > 0, size.height > 0 else { return nil }
+        return CGSize(width: size.width * pdfPixelsPerPoint, height: size.height * pdfPixelsPerPoint)
+    }
+
+    /// Where the PDF page goes: the whole page width, from the top.
+    func pdfFrame(_ page: CGPDFPage) -> CGRect {
+        guard let size = Self.pdfSize(page) else { return .zero }
+        return CGRect(origin: .zero, size: size)
     }
 
     /// The bounds of each stroke group as placed on the page, in page pixels,

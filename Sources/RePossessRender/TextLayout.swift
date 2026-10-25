@@ -13,8 +13,9 @@ import RePossessFormat
 /// its bottom `descent` below its last baseline, and `gap` above its top.
 /// It reproduces every measured baseline-to-baseline distance:
 /// body to body 69.5, body to Subheading 89.3, Subheading to body 63.3, and Title to body 70.4.
-/// Values marked "guess" were not measured, because the samples have no wrapped
-/// Title or Subheading and no Title after another paragraph.
+/// A Title's wrapped lines step 76.0 px, and a Title after another paragraph has a gap of 88.0 px
+/// above it (measured on Mattt's own typed pages; Body to Title steps 163.1 px, Title to Title 164.0).
+/// The Subheading's wrapped-line pitch is a guess, scaled from the body's, because no sample wraps one.
 public struct StyleMetrics: Sendable {
     public var fontName: String
     public var size: CGFloat
@@ -27,14 +28,13 @@ public struct StyleMetrics: Sendable {
     public static func metrics(for style: ParagraphStyle) -> StyleMetrics {
         switch style {
         case .heading:
-            // gap and pitch: guess
             StyleMetrics(
                 fontName: TextFonts.serif,
                 size: 64,
                 ascent: 63.2,
                 descent: 12.8,
-                gap: 24,
-                pitch: 91,
+                gap: 88,
+                pitch: 76,
                 indent: 0
             )
         case .bold:

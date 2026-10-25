@@ -147,7 +147,8 @@ private func pixel(_ png: Data, x: Int, y: Int) -> (r: UInt8, g: UInt8, b: UInt8
         context.closePDF()
         let pdf = CGPDFDocument(CGDataProvider(data: data)!)!.page(at: 1)!
         let s = PageScene(pageBytes: nil, pdfPage: pdf)
-        #expect(abs(s.height - max(1872, 792 * 1404 / 612)) < 1)
+        // A PDF page keeps its size, at 227/72 tablet pixels per point.
+        #expect(abs(s.width - 612 * 227 / 72) < 0.01 && abs(s.height - (792 * 227 / 72).rounded(.up)) < 1)
         let image = try PageRenderer.render(s, maxWidth: 1404, maxHeight: 1872)
         #expect(pixel(image.png, x: 700, y: 50).r < 30)
         #expect(pixel(image.png, x: 700, y: 400).r > 220)

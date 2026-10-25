@@ -16,8 +16,9 @@ Lines are matched by their text, in order, with difflib.
 The script prints counts and distances only, never text, unless --show-text is given,
 so that it can run on private pages.
 Stroke groups are compared by their bounds: for each group that rePossess places,
-the tablet's vector paths whose x range falls inside the group's are joined,
-and the script prints the vertical distance between the two bounds.
+the tablet's vector paths within 15 px of the group are joined,
+and the script prints the distance between the edges of the two bounds.
+The tablet draws each stroke as an outline, so its bounds are wider by about half a stroke.
 That match is a heuristic; check the images by eye as well.
 """
 
@@ -76,6 +77,8 @@ def tablet_paths(pdf: str, page: str) -> list[tuple[float, float, float, float]]
 
 
 def normalize(text: str) -> str:
+    # mutool writes U+FFFD for ligature glyphs, such as "fi", that it cannot map to text.
+    text = re.sub("ffi|ffl|ff|fi|fl", "\ufffd", text)
     return " ".join(text.split())
 
 
@@ -109,6 +112,21 @@ def main() -> None:
     if theirs:
         print(f"tablet text bottom: {max(t['baseline'] for t in theirs):.0f} px; "
               f"rePossess: {max((o['baseline'] for o in ours), default=0):.0f} px")
+    if "--detail" in sys.argv:
+        # For each tablet line: its font size, the style and step of the matching line, without text.
+        mine = {id(t): o for t, o in pairs}
+        previous_t = previous_o = None
+        for t in theirs:
+            o = mine.get(id(t))
+            step_t = t["baseline"] - previous_t if previous_t is not None else 0
+            if o is not None:
+                step_o = o["baseline"] - previous_o if previous_o is not None else 0
+                print(f"  size {t['size']:4.0f} {o['style']:16} tablet step {step_t:6.1f} rePossess step {step_o:6.1f}"
+                      f" offset {o['baseline'] - t['baseline']:+6.1f}")
+                previous_o = o["baseline"]
+            else:
+                print(f"  size {t['size']:4.0f} {'(no match)':16} tablet step {step_t:6.1f}")
+            previous_t = t["baseline"]
     if show:
         for tag, i1, i2, j1, j2 in matcher.get_opcodes():
             if tag != "equal":
@@ -120,16 +138,18 @@ def main() -> None:
         print(f"stroke groups: {len(groups)}, of which anchored: {sum(1 for g in groups if g['anchored'])}; "
               f"tablet vector paths: {len(paths)}")
         for i, g in enumerate(groups):
-            x0, x1 = g["x"], g["x"] + g["width"]
-            inside = [p for p in paths if p[0] >= x0 - 15 and p[2] <= x1 + 15 and (p[2] - p[0]) > 0.5 * (x1 - x0)]
-            if not inside:
-                print(f"  group {i + 1} ({'anchored' if g['anchored'] else 'free'}, {g['strokes']} strokes): "
-                      "no tablet path spans its width")
+            x0, y0 = g["x"] - 15, g["y"] - 15
+            x1, y1 = g["x"] + g["width"] + 15, g["y"] + g["height"] + 15
+            near = [p for p in paths if p[0] < x1 and p[2] > x0 and p[1] < y1 and p[3] > y0]
+            label = f"  group {i + 1} ({'anchored' if g['anchored'] else 'free'}, {g['strokes']} strokes)"
+            if not near:
+                print(f"{label}: no tablet path within 15 px of it")
                 continue
-            # The path closest in height to the group's.
-            best = min(inside, key=lambda p: abs((p[3] - p[1]) - g["height"]) + abs(p[1] - g["y"]) * 0.01)
-            print(f"  group {i + 1} ({'anchored' if g['anchored'] else 'free'}, {g['strokes']} strokes): "
-                  f"top {g['y'] - best[1]:+.0f} px, bottom {g['y'] + g['height'] - best[3]:+.0f} px from the tablet's")
+            left, top = min(p[0] for p in near), min(p[1] for p in near)
+            right, bottom = max(p[2] for p in near), max(p[3] for p in near)
+            print(f"{label}: left {g['x'] - left:+.0f}, top {g['y'] - top:+.0f}, "
+                  f"right {g['x'] + g['width'] - right:+.0f}, bottom {g['y'] + g['height'] - bottom:+.0f} px "
+                  f"from the {len(near)} tablet paths near it")
 
 
 if __name__ == "__main__":
