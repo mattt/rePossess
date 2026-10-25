@@ -91,10 +91,19 @@ public struct LibraryStatus: Sendable, Equatable {
     public var documents: Int
     public var folders: Int
     public var pages: Int
+    /// The time of each source's last refresh that finished.
     public var lastRefresh: [Source: Date]
+    /// Each source's error since its last success, if its last refresh failed or stopped early.
     public var lastError: [Source: String]
+    /// When each error in ``lastError`` happened, when the library knows.
+    public var lastErrorAt: [Source: Date]
     public var cloudRootHash: String?
     public var cloudGeneration: Int64?
+
+    /// The source of the most recent refresh that finished, and its time.
+    public var latestRefresh: (source: Source, date: Date)? {
+        lastRefresh.max { $0.value < $1.value }.map { ($0.key, $0.value) }
+    }
 }
 
 /// The mirror of the tablet on the Mac and its index.
@@ -323,11 +332,16 @@ public final class Library: Sendable {
         let state = try stateValues()
         var lastRefresh: [Source: Date] = [:]
         var lastError: [Source: String] = [:]
+        var lastErrorAt: [Source: Date] = [:]
         for source in [Source.usb, .cloud] {
-            if let t = state["\(source.rawValue).last_refresh"].flatMap(Double.init) {
-                lastRefresh[source] = Date(timeIntervalSince1970: t)
+            let success = state["\(source.rawValue).last_refresh"].flatMap(Double.init)
+            let failure = state["\(source.rawValue).last_error_at"].flatMap(Double.init)
+            if let success { lastRefresh[source] = Date(timeIntervalSince1970: success) }
+            // An error older than a later success is stale.
+            if let e = state["\(source.rawValue).last_error"], !e.isEmpty, (failure ?? .infinity) > (success ?? 0) {
+                lastError[source] = e
+                if let failure { lastErrorAt[source] = Date(timeIntervalSince1970: failure) }
             }
-            if let e = state["\(source.rawValue).last_error"], !e.isEmpty { lastError[source] = e }
         }
         return LibraryStatus(
             root: root,
@@ -336,6 +350,7 @@ public final class Library: Sendable {
             pages: counts.dropFirst(2).first?.int ?? 0,
             lastRefresh: lastRefresh,
             lastError: lastError,
+            lastErrorAt: lastErrorAt,
             cloudRootHash: state["cloud.root_hash"],
             cloudGeneration: state["cloud.generation"].flatMap(Int64.init)
         )

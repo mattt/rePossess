@@ -14,12 +14,24 @@ public struct RefreshReport: Sendable, Equatable {
     public var unchanged = 0
     /// The items removed because the source no longer lists them.
     public var removed = 0
+    /// The documents whose copy in the mirror is newer than the source's, and so were kept.
+    public var keptNewer = 0
     /// Documents that could not be read, with the reason.
     public var failed: [String] = []
-    /// Requests sent to the tablet or the cloud.
+    /// Requests sent to the tablet or the cloud, including retries.
     public var requests = 0
-    /// Bytes downloaded.
+    /// Bytes received from the tablet or the cloud, in response bodies.
     public var bytes = 0
+    /// Files downloaded from the cloud, apart from indexes.
+    public var filesDownloaded = 0
+    /// Files that the cloud lists with the same hash as the mirror's copy, which were not downloaded.
+    public var filesReused = 0
+    /// The size of the reused files.
+    public var bytesReused = 0
+    /// Requests sent again after HTTP 429 or a 5xx status.
+    public var retries = 0
+    /// Pauses for the cloud's rate limits.
+    public var waits = 0
     /// Seconds from start to end.
     public var seconds = 0.0
     /// The error that stopped the refresh before the end, if one did.
@@ -74,17 +86,24 @@ extension Library {
     }
 
     private func recordFailure(id: String, name: String, parent: String, source: Source, error: any Error) {
-        try? storeItem(
-            id: id,
-            kind: .document,
-            name: name,
-            parent: parent,
-            trashed: false,
-            source: source,
-            usbModified: nil,
-            cloudHash: nil,
-            error: "\(error)"
-        )
+        try? markFailed(id: id, name: name, parent: parent, source: source, error: "\(error)")
+    }
+
+    /// Records a refresh that finished: its time, and no error.
+    func recordRefreshSuccess(_ source: Source, at date: Date = Date()) throws {
+        try setState([
+            "\(source.rawValue).last_refresh": String(date.timeIntervalSince1970),
+            "\(source.rawValue).last_error": "",
+            "\(source.rawValue).last_error_at": "",
+        ])
+    }
+
+    /// Records a refresh that failed or stopped early, and keeps the time of the last success.
+    func recordRefreshFailure(_ source: Source, _ message: String, at date: Date = Date()) throws {
+        try setState([
+            "\(source.rawValue).last_error": message,
+            "\(source.rawValue).last_error_at": String(date.timeIntervalSince1970),
+        ])
     }
 
     // MARK: USB
@@ -102,13 +121,14 @@ extension Library {
         try await withRefreshLock {
             let start = Date()
             var report = RefreshReport(source: .usb)
+            // Phase 1 built this state with `compactMapValues`, which kept a `nil` as `.some(nil)`
+            // and so wrote NULL over the time of the last success whenever a refresh failed.
             let finish: (String?) -> Void = { error in
-                try? self.setState(
-                    [
-                        "usb.last_error": error ?? "",
-                        "usb.last_refresh": error == nil ? String(Date().timeIntervalSince1970) : nil,
-                    ].compactMapValues { $0 }
-                )
+                if let error {
+                    try? self.recordRefreshFailure(.usb, error)
+                } else {
+                    try? self.recordRefreshSuccess(.usb)
+                }
             }
 
             let items: [USBItem]
@@ -206,31 +226,46 @@ extension Library {
 
     // MARK: Cloud
 
+    /// How many items a cloud refresh reads at once.
+    /// The session's transport bounds the requests in flight, whatever this is.
+    static let cloudItemWindow = 4
+
     /// Refreshes the library from reMarkable's cloud.
     ///
     /// It reads the root; when the root hash is the one from the last refresh, it stops there.
-    /// Otherwise it reads the root index and, for each document whose index hash changed,
-    /// the document's index and the files whose hashes differ from the files in the mirror.
-    /// It removes items that the root no longer lists, and skips items in the trash.
+    /// Otherwise it reads the root index and, for each item whose index hash changed,
+    /// the item's index, its metadata, and the files whose hashes differ from the files in the mirror.
+    /// It reads several items at once, and the session's transport paces the requests.
+    ///
+    /// When the mirror's copy of a document is newer than the cloud's, by `lastModified`,
+    /// the refresh keeps the mirror's copy.
+    /// The cloud can be behind the tablet: on 2026-10-25 it held June versions of two documents
+    /// that the tablet had changed in September and October.
+    /// It removes items that the root no longer lists, if the cloud listed them before;
+    /// an item that only USB has seen may not have reached the cloud yet.
+    /// It skips items in the trash.
     public func refreshCloud(
         session: CloudSession = CloudSession(),
         progress: @Sendable (String) -> Void = { _ in }
     ) async throws -> RefreshReport {
         try await withRefreshLock {
             let start = Date()
+            let before = await session.usage()
             var report = RefreshReport(source: .cloud)
             do {
                 try await refreshCloud(session: session, report: &report, progress: progress)
-                try setState([
-                    "cloud.last_error": report.stoppedBy ?? "",
-                    "cloud.last_refresh": String(Date().timeIntervalSince1970),
-                ])
-                report.seconds = Date().timeIntervalSince(start)
-                return report
             } catch {
-                try? setState(["cloud.last_error": "\(error)"])
+                try? recordRefreshFailure(.cloud, "\(error)")
                 throw error
             }
+            let usage = await session.usage() - before
+            report.requests = usage.requests
+            report.bytes = usage.bytes
+            report.retries = usage.retries
+            report.waits = usage.waits
+            try recordRefreshSuccess(.cloud)
+            report.seconds = Date().timeIntervalSince(start)
+            return report
         }
     }
 
@@ -240,57 +275,105 @@ extension Library {
         progress: @Sendable (String) -> Void
     ) async throws {
         let client = try await session.client()
-        report.requests += 1
         let root = try await client.root()
-        report.requests += 1
         let state = try stateValues()
         let stored = try versions()
         let hasErrors = stored.values.contains { $0.error != nil }
         if root.hash == state["cloud.root_hash"], !hasErrors {
-            report.listed = try status().documents
+            report.listed = stored.values.filter { $0.isVisibleDocument && $0.cloudHash != nil }.count
             report.unchanged = report.listed
             progress("The cloud root has not changed since the last refresh.")
             return
         }
 
         let rootIndex = try await client.index(id: "root", hash: root.hash)
-        report.requests += 1
         guard rootIndex.hashMatches else {
             throw CloudError.hashMismatch(expected: root.hash, actual: (try? rootIndex.index.hash()) ?? "")
         }
         let entries = rootIndex.index.entries.filter { isValidItemID($0.id) }
         progress("The cloud root lists \(entries.count) items.")
 
-        for (i, entry) in entries.enumerated() {
+        var pending: [(entry: IndexEntry, canKeep: Bool)] = []
+        for entry in entries {
             if let known = stored[entry.id], known.cloudHash == entry.hash, known.error == nil {
-                if known.kind == ItemKind.document.rawValue { report.unchanged += 1 }
+                if known.isVisibleDocument { report.unchanged += 1 }
                 continue
             }
-            progress("Reading item \(i + 1) of \(entries.count).")
-            do {
-                try await refreshCloudItem(entry, client: client, report: &report)
-            } catch let error as CloudError {
-                if case .unauthorized = error { throw error }
-                report.failed.append("\(entry.id): \(error)")
-                recordFailure(id: entry.id, name: "", parent: "", source: .cloud, error: error)
-            } catch {
-                report.failed.append("\(entry.id): \(error)")
-                recordFailure(id: entry.id, name: "", parent: "", source: .cloud, error: error)
+            let known = stored[entry.id]
+            pending.append((entry, known != nil && known?.error == nil))
+        }
+
+        var next = pending.makeIterator()
+        var done = 0
+        try await withThrowingTaskGroup(of: CloudItemResult.self) { group in
+            for _ in 0 ..< Self.cloudItemWindow {
+                guard let item = next.next() else { break }
+                group.addTask { try await self.fetchCloudItem(item.entry, canKeep: item.canKeep, client: client) }
+            }
+            while let result = try await group.next() {
+                done += 1
+                progress("Read item \(done) of \(pending.count).")
+                apply(result, to: &report)
+                if let item = next.next() {
+                    group.addTask { try await self.fetchCloudItem(item.entry, canKeep: item.canKeep, client: client) }
+                }
             }
         }
 
         let listed = Set(entries.map(\.id))
-        let gone = try versions().keys.filter { !listed.contains($0) }
+        let gone = try versions().filter { id, version in
+            !listed.contains(id) && (version.cloudHash != nil || version.source == .cloud)
+        }.map(\.key)
         try remove(ids: gone)
         report.removed = gone.count
-        report.listed = try status().documents
+        report.listed = try versions().filter { listed.contains($0.key) && $0.value.isVisibleDocument }.count
         try setState(["cloud.root_hash": root.hash, "cloud.generation": String(root.generation)])
     }
 
-    private func refreshCloudItem(_ entry: IndexEntry, client: CloudClient, report: inout RefreshReport) async throws {
+    /// What reading one root entry found. Child tasks read; the refresh writes, one result at a time.
+    enum CloudItemResult: Sendable {
+        /// A folder, or an item in the trash: the metadata is all the library keeps.
+        case metadataOnly(IndexEntry, DocumentMetadata)
+        /// The mirror's copy is newer than the cloud's.
+        case keptNewer(IndexEntry)
+        /// A document's files, with counts of the files downloaded and reused.
+        case document(IndexEntry, files: [MirrorFile], downloaded: Int, reused: Int, reusedBytes: Int)
+        case failed(IndexEntry, any Error)
+
+        var entry: IndexEntry {
+            switch self {
+            case .metadataOnly(let entry, _), .keptNewer(let entry), .document(let entry, _, _, _, _),
+                .failed(let entry, _):
+                entry
+            }
+        }
+    }
+
+    struct MirrorFile: Sendable {
+        var name: String
+        var data: Data
+    }
+
+    /// Reads one root entry: its index, its metadata, and the files that the mirror lacks.
+    /// A rejected token stops the whole refresh; any other error fails only this item.
+    private func fetchCloudItem(_ entry: IndexEntry, canKeep: Bool, client: CloudClient) async throws
+        -> CloudItemResult
+    {
+        do {
+            return try await readCloudItem(entry, canKeep: canKeep, client: client)
+        } catch let error as CloudError {
+            if case .unauthorized = error { throw error }
+            return .failed(entry, error)
+        } catch {
+            return .failed(entry, error)
+        }
+    }
+
+    private func readCloudItem(_ entry: IndexEntry, canKeep: Bool, client: CloudClient) async throws
+        -> CloudItemResult
+    {
         let id = entry.id
         let fetched = try await client.index(id: id, hash: entry.hash)
-        report.requests += 1
         guard fetched.hashMatches else {
             throw CloudError.hashMismatch(expected: entry.hash, actual: (try? fetched.index.hash()) ?? "")
         }
@@ -299,40 +382,85 @@ extension Library {
             throw DocumentError.missing("\(id).metadata")
         }
         let metadataData = try await client.file(metadataEntry)
-        report.requests += 1
-        report.bytes += metadataData.count
         let metadata = try DocumentMetadata(parsing: metadataData)
+        let current = documentsURL.appending(path: id, directoryHint: .isDirectory)
+        if canKeep, let cloudTime = metadata.lastModified,
+            let localData = try? Data(contentsOf: current.appending(path: "\(id).metadata")),
+            let localTime = (try? DocumentMetadata(parsing: localData))?.lastModified,
+            localTime > cloudTime
+        {
+            return .keptNewer(entry)
+        }
         if metadata.isTrashed || metadata.kind == .folder {
-            try storeItem(
-                id: id,
-                kind: metadata.kind,
-                name: metadata.visibleName,
-                parent: metadata.parent,
-                trashed: metadata.isTrashed,
-                source: .cloud,
-                usbModified: nil,
-                cloudHash: entry.hash
-            )
-            if metadata.isTrashed { try? FileManager.default.removeItem(at: documentsURL.appending(path: id)) }
-            return
+            return .metadataOnly(entry, metadata)
         }
 
-        var downloaded: [(name: String, data: Data)] = [(metadataEntry.id, metadataData)]
-        let current = documentsURL.appending(path: id, directoryHint: .isDirectory)
-        for file in files where file.id != metadataEntry.id {
+        let others = files.filter { $0.id != metadataEntry.id }
+        for file in others {
             guard isSafeArchivePath(file.id) else { throw ZipError.unsafePath(file.id) }
-            let local = current.appending(path: file.id)
-            if let data = try? Data(contentsOf: local), ContentHash.sha256Hex(data) == file.hash {
-                downloaded.append((file.id, data))
-                continue
-            }
-            let data = try await client.file(file)
-            report.requests += 1
-            report.bytes += data.count
-            downloaded.append((file.id, data))
         }
-        let folder = try replaceFolder(id: id, files: downloaded)
-        try store(indexDocument(folder), id: id, source: .cloud, usbModified: nil, cloudHash: entry.hash)
-        report.downloaded += 1
+        var result = [MirrorFile(name: metadataEntry.id, data: metadataData)]
+        var downloaded = 1
+        var reused = 0
+        var reusedBytes = 0
+        try await withThrowingTaskGroup(of: (file: MirrorFile, reused: Bool).self) { group in
+            for file in others {
+                group.addTask {
+                    let local = current.appending(path: file.id)
+                    if let data = try? Data(contentsOf: local), ContentHash.sha256Hex(data) == file.hash {
+                        return (MirrorFile(name: file.id, data: data), true)
+                    }
+                    return (MirrorFile(name: file.id, data: try await client.file(file)), false)
+                }
+            }
+            for try await item in group {
+                result.append(item.file)
+                if item.reused {
+                    reused += 1
+                    reusedBytes += item.file.data.count
+                } else {
+                    downloaded += 1
+                }
+            }
+        }
+        return .document(entry, files: result, downloaded: downloaded, reused: reused, reusedBytes: reusedBytes)
+    }
+
+    /// Writes what one root entry's read found to the mirror and the index.
+    private func apply(_ result: CloudItemResult, to report: inout RefreshReport) {
+        let id = result.entry.id
+        do {
+            switch result {
+            case .metadataOnly(let entry, let metadata):
+                try storeItem(
+                    id: id,
+                    kind: metadata.kind,
+                    name: metadata.visibleName,
+                    parent: metadata.parent,
+                    trashed: metadata.isTrashed,
+                    source: .cloud,
+                    usbModified: nil,
+                    cloudHash: entry.hash
+                )
+                report.filesDownloaded += 1
+                if metadata.isTrashed { try? FileManager.default.removeItem(at: documentsURL.appending(path: id)) }
+            case .keptNewer(let entry):
+                try setCloudHash(entry.hash, id: id)
+                report.keptNewer += 1
+                report.filesDownloaded += 1
+            case .document(let entry, let files, let downloaded, let reused, let reusedBytes):
+                let folder = try replaceFolder(id: id, files: files.map { ($0.name, $0.data) })
+                try store(indexDocument(folder), id: id, source: .cloud, usbModified: nil, cloudHash: entry.hash)
+                report.downloaded += 1
+                report.filesDownloaded += downloaded
+                report.filesReused += reused
+                report.bytesReused += reusedBytes
+            case .failed(_, let error):
+                throw error
+            }
+        } catch {
+            report.failed.append("\(id): \(error)")
+            recordFailure(id: id, name: "", parent: "", source: .cloud, error: error)
+        }
     }
 }

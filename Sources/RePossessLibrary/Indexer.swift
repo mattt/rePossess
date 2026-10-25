@@ -106,6 +106,11 @@ func searchBody(_ page: LibraryPage) -> String {
 
 extension Library {
     /// Writes a document's records, replacing any earlier ones.
+    ///
+    /// A `nil` version key keeps the stored one, so that each source's key survives
+    /// a refresh from the other source.
+    /// The key then still names a version that is no newer than the mirror's copy,
+    /// so the next refresh from that source skips the document until the source changes it.
     func store(
         _ document: IndexedDocument,
         id: String,
@@ -123,7 +128,8 @@ extension Library {
                   kind = excluded.kind, name = excluded.name, parent = excluded.parent,
                   file_type = excluded.file_type, modified = excluded.modified, page_count = excluded.page_count,
                   content_status = excluded.content_status, summary = excluded.summary, tags = excluded.tags,
-                  source = excluded.source, usb_modified = excluded.usb_modified, cloud_hash = excluded.cloud_hash,
+                  source = excluded.source, usb_modified = coalesce(excluded.usb_modified, items.usb_modified),
+                  cloud_hash = coalesce(excluded.cloud_hash, items.cloud_hash),
                   trashed = excluded.trashed, refreshed = excluded.refreshed, error = NULL
                 """,
                 [
@@ -162,6 +168,7 @@ extension Library {
     }
 
     /// Writes a folder's record, or a trashed item's, which the tools do not show.
+    /// A `nil` version key keeps the stored one, as in ``store(_:id:source:usbModified:cloudHash:)``.
     func storeItem(
         id: String,
         kind: ItemKind,
@@ -180,7 +187,8 @@ extension Library {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                   kind = excluded.kind, name = excluded.name, parent = excluded.parent, source = excluded.source,
-                  usb_modified = excluded.usb_modified, cloud_hash = excluded.cloud_hash,
+                  usb_modified = coalesce(excluded.usb_modified, items.usb_modified),
+                  cloud_hash = coalesce(excluded.cloud_hash, items.cloud_hash),
                   trashed = excluded.trashed, refreshed = excluded.refreshed, error = excluded.error
                 """,
                 [
@@ -211,14 +219,56 @@ extension Library {
         }
     }
 
-    /// The stored version keys of every item: `usb_modified`, `cloud_hash`, and any error.
-    func versions() throws -> [String: (usbModified: String?, cloudHash: String?, error: String?, kind: String)] {
-        var result: [String: (String?, String?, String?, String)] = [:]
-        for row in try database.query("SELECT id, usb_modified, cloud_hash, error, kind FROM items") {
-            result[row[0].string ?? ""] = (row[1].string, row[2].string, row[3].string, row[4].string ?? "")
+    /// Records that a document could not be read.
+    /// A new item gets a row with the error; a stored item keeps its name, files, and pages,
+    /// and gains the error, so that the next refresh tries it again.
+    func markFailed(id: String, name: String, parent: String, source: Source, error: String) throws {
+        _ = try database.query(
+            """
+            INSERT INTO items (id, kind, name, parent, source, trashed, refreshed, error)
+            VALUES (?, 'DocumentType', ?, ?, ?, 0, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET refreshed = excluded.refreshed, error = excluded.error
+            """,
+            [.text(id), .text(name), .text(parent), .text(source.rawValue), SQLValue(Date()), .text(error)]
+        )
+    }
+
+    /// Records the cloud's version key for a document whose copy in the mirror is newer.
+    func setCloudHash(_ hash: String, id: String) throws {
+        _ = try database.query("UPDATE items SET cloud_hash = ? WHERE id = ?", [.text(hash), .text(id)])
+    }
+
+    /// The stored version keys of every item.
+    func versions() throws -> [String: StoredVersion] {
+        var result: [String: StoredVersion] = [:]
+        for row in try database.query("SELECT id, usb_modified, cloud_hash, error, kind, source, trashed FROM items") {
+            result[row[0].string ?? ""] = StoredVersion(
+                usbModified: row[1].string,
+                cloudHash: row[2].string,
+                error: row[3].string,
+                kind: ItemKind(rawValue: row[4].string ?? "") ?? .document,
+                source: Source(rawValue: row[5].string ?? "") ?? .usb,
+                trashed: row[6].int == 1
+            )
         }
         return result
     }
+}
+
+/// An item's version keys and state, as the library stored them.
+struct StoredVersion {
+    /// The `ModifiedClient` from the last USB refresh that wrote the item.
+    var usbModified: String?
+    /// The index hash from the last cloud refresh that wrote or checked the item.
+    var cloudHash: String?
+    var error: String?
+    var kind: ItemKind
+    /// The source that last wrote the item's files.
+    var source: Source
+    var trashed: Bool
+
+    /// Whether the item is a document that the tools show.
+    var isVisibleDocument: Bool { kind == .document && !trashed }
 }
 
 extension Library {

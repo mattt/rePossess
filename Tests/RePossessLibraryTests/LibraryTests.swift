@@ -202,11 +202,36 @@ func temporaryLibrary() throws -> Library {
         try await Shelf.stock(tablet)
         let library = try temporaryLibrary()
         _ = try await library.refreshUSB(client: usb(tablet))
+        let success = try #require(try library.status().lastRefresh[.usb])
         await tablet.setHang(true)
         await #expect(throws: USBError.self) { try await library.refreshUSB(client: usb(tablet)) }
         #expect(try library.documents().count == 3)
-        #expect(try library.status().lastError[.usb]?.contains("off and on") == true)
         #expect(await tablet.paths.suffix(1) == ["/documents/"])
+
+        // The failure keeps the time of the last success, and has its own time.
+        let failed = try library.status()
+        #expect(failed.lastError[.usb]?.contains("off and on") == true)
+        #expect(failed.lastRefresh[.usb] == success)
+        #expect(try #require(failed.lastErrorAt[.usb]) >= success)
+
+        // A later success clears the error.
+        await tablet.setHang(false)
+        _ = try await library.refreshUSB(client: usb(tablet))
+        let recovered = try library.status()
+        #expect(recovered.lastError[.usb] == nil && recovered.lastErrorAt[.usb] == nil)
+        #expect(try #require(recovered.lastRefresh[.usb]) >= success)
+    }
+
+    @Test func anErrorOlderThanTheLastSuccessIsStale() throws {
+        let library = try temporaryLibrary()
+        try library.recordRefreshFailure(.cloud, "invented failure", at: Date(timeIntervalSince1970: 100))
+        #expect(try library.status().lastError[.cloud] == "invented failure")
+        try library.setState(["cloud.last_refresh": "200"])
+        #expect(try library.status().lastError[.cloud] == nil)
+        // An error from before phase 2 has no time, and shows until a success clears it.
+        try library.setState(["usb.last_error": "older failure"])
+        #expect(try library.status().lastError[.usb] == "older failure")
+        #expect(try library.status().lastErrorAt[.usb] == nil)
     }
 
     @Test func aRefreshNeedsTheLock() async throws {
@@ -225,9 +250,19 @@ func temporaryLibrary() throws -> Library {
     }
 }
 
+/// Records the waits that a ``Pacing`` asks for, without sleeping.
+actor Waits {
+    private(set) var all: [Duration] = []
+    func record(_ duration: Duration) { all.append(duration) }
+}
+
 @Suite struct CloudRefreshTests {
-    func session(_ cloud: FakeCloud) -> CloudSession {
-        CloudSession(transport: cloud, deviceToken: { FakeCloud.deviceToken })
+    func session(_ cloud: FakeCloud, waits: Waits = Waits()) -> CloudSession {
+        CloudSession(
+            transport: cloud,
+            deviceToken: { FakeCloud.deviceToken },
+            pacing: Pacing(sleep: { await waits.record($0) })
+        )
     }
 
     @Test func mirrorsTheAccountAndSkipsTheTrash() async throws {
@@ -273,14 +308,148 @@ func temporaryLibrary() throws -> Library {
         let cloud = FakeCloud()
         _ = try await Shelf.stock(cloud)
         let library = try temporaryLibrary()
-        _ = try await library.refreshUSB(client: USBClient(transport: tablet, checkInterface: { true }))
+        let usb = USBClient(transport: tablet, checkInterface: { true })
+        _ = try await library.refreshUSB(client: usb)
         let report = try await library.refreshCloud(session: session(cloud))
         #expect(try library.documents().count == 3)
         #expect(try library.documents().allSatisfy { $0.source == .cloud })
         // The cloud copy's files match the USB copy's, so only the indexes and metadata were downloaded.
         let files = await cloud.requests.compactMap { $0.headers["rm-filename"] }
         #expect(!files.contains { $0.hasSuffix(".rm") || $0.hasSuffix(".pdf") })
-        #expect(report.downloaded == 3)
+        #expect(report.downloaded == 3 && report.keptNewer == 0)
+        #expect(report.filesDownloaded == 4)  // the metadata of the folder and of the three documents
+        #expect(report.filesReused == 8 && report.bytesReused > 1000)  // the content files, the pages, and the PDF
+        // The counts include the token, the root, and every index.
+        #expect(report.requests == (await cloud.requests.count))
+        #expect(report.bytes == (await cloud.bytesServed))
+
+        // Each source keeps its own version key, so the next USB refresh downloads nothing.
+        let again = try await library.refreshUSB(client: USBClient(transport: tablet, checkInterface: { true }))
+        #expect(again.downloaded == 0 && again.unchanged == 3)
+    }
+
+    /// The cloud on 2026-10-25 held older versions of two documents than the tablet did.
+    @Test func keepsTheMirrorsNewerCopy() async throws {
+        let tablet = FakeTablet()
+        try await Shelf.stock(tablet)
+        // The tablet has a third page that the cloud has not received.
+        var newer = Shelf.handwrittenDocument()
+        newer.pages.append(("h-3", PageBuilder()))
+        newer.lastModified = Date(timeIntervalSince1970: 1_792_900_000)
+        await tablet.add(
+            USBItem(
+                id: Shelf.handwritten,
+                type: "DocumentType",
+                fileType: "notebook",
+                modifiedClient: "2026-10-26T07:00:00.000Z",
+                visibleName: "Sketches"
+            ),
+            rmdoc: try newer.rmdoc()
+        )
+        let cloud = FakeCloud()
+        _ = try await Shelf.stock(cloud)
+        let library = try temporaryLibrary()
+        _ = try await library.refreshUSB(client: USBClient(transport: tablet, checkInterface: { true }))
+        #expect(try library.pages(of: Shelf.handwritten).count == 3)
+
+        let report = try await library.refreshCloud(session: session(cloud))
+        #expect(report.keptNewer == 1 && report.downloaded == 2 && report.failed.isEmpty)
+        #expect(try library.pages(of: Shelf.handwritten).count == 3)
+        #expect(try library.item(id: Shelf.handwritten)?.source == .usb)
+        let names = await cloud.requests.compactMap { $0.headers["rm-filename"] }
+        #expect(
+            names.filter { $0.hasPrefix(Shelf.handwritten) } == [
+                "\(Shelf.handwritten).docSchema", "\(Shelf.handwritten).metadata",
+            ]
+        )
+
+        // Once the cloud has the newer version, the refresh takes it.
+        _ = try await Shelf.stock(cloud)
+        let newerEntry = try await cloud.seedDocument(
+            id: Shelf.handwritten,
+            files: try newer.files().map { ($0.name, $0.data) }
+        )
+        var entries = try await Shelf.stock(cloud)
+        entries.removeAll { $0.id == Shelf.handwritten }
+        try await cloud.seedRoot(entries + [newerEntry])
+        let caughtUp = try await library.refreshCloud(session: session(cloud))
+        #expect(caughtUp.keptNewer == 0 && caughtUp.downloaded == 1)
+        #expect(try library.item(id: Shelf.handwritten)?.source == .cloud)
+        #expect(try library.pages(of: Shelf.handwritten).count == 3)
+    }
+
+    @Test func removesOnlyWhatTheCloudListedBefore() async throws {
+        let tablet = FakeTablet()
+        try await Shelf.stock(tablet)
+        // A document that the tablet has and the cloud does not have yet.
+        let fresh = DocumentBuilder(id: "d0000000-0000-4000-8000-000000000009", name: "Fresh", pages: [("f-1", nil)])
+        await tablet.add(
+            USBItem(
+                id: fresh.id,
+                type: "DocumentType",
+                fileType: "notebook",
+                modifiedClient: "2026-10-25T08:00:00.000Z",
+                visibleName: "Fresh"
+            ),
+            rmdoc: try fresh.rmdoc()
+        )
+        let cloud = FakeCloud()
+        var entries = try await Shelf.stock(cloud)
+        let library = try temporaryLibrary()
+        _ = try await library.refreshUSB(client: USBClient(transport: tablet, checkInterface: { true }))
+        let first = try await library.refreshCloud(session: session(cloud))
+        #expect(first.removed == 0 && first.listed == 3)
+        #expect(try library.item(id: fresh.id) != nil)
+
+        // The cloud drops a document that it listed before.
+        entries.removeAll { $0.id == Shelf.annotated }
+        try await cloud.seedRoot(entries)
+        let second = try await library.refreshCloud(session: session(cloud))
+        #expect(second.removed == 1)
+        #expect(try library.item(id: Shelf.annotated) == nil && library.item(id: fresh.id) != nil)
+    }
+
+    @Test func readsSeveralDocumentsAtOnce() async throws {
+        let cloud = FakeCloud()
+        var entries: [IndexEntry] = []
+        for i in 0 ..< 10 {
+            var first = PageBuilder()
+            first.paragraphs = [StyledParagraph(.plain, "Invented note \(i)")]
+            var second = PageBuilder()
+            second.paragraphs = [StyledParagraph(.plain, "Second page of note \(i)")]
+            let builder = DocumentBuilder(
+                id: String(format: "e0000000-0000-4000-8000-%012d", i),
+                name: "Note \(i)",
+                pages: [("n-\(i)-1", first), ("n-\(i)-2", second)]
+            )
+            entries.append(
+                try await cloud.seedDocument(id: builder.id, files: try builder.files().map { ($0.name, $0.data) })
+            )
+        }
+        try await cloud.seedRoot(entries)
+        await cloud.set(latency: .milliseconds(10))
+        let library = try temporaryLibrary()
+        let report = try await library.refreshCloud(session: session(cloud))
+        #expect(report.downloaded == 10 && report.failed.isEmpty, "\(report.failed)")
+        #expect(report.filesDownloaded == 40)  // content, metadata, and two pages each
+        let most = await cloud.maxInFlight
+        #expect(most > 1 && most <= 4)
+        #expect(try library.search("invented note 7").hits.first?.item.name == "Note 7")
+    }
+
+    @Test func honorsRateLimitsDuringARefresh() async throws {
+        let cloud = FakeCloud()
+        _ = try await Shelf.stock(cloud)
+        await cloud.set(
+            extraHeaders: ["x-ratelimit-limit": "30", "x-ratelimit-remaining": "1", "x-ratelimit-reset": "1"],
+            fileFailures: [429]
+        )
+        let waits = Waits()
+        let library = try temporaryLibrary()
+        let report = try await library.refreshCloud(session: session(cloud, waits: waits))
+        #expect(report.failed.isEmpty && report.downloaded == 3)
+        #expect(report.retries == 1 && report.waits > 1)
+        #expect(await waits.all.allSatisfy { $0 == .seconds(1) })
     }
 }
 
