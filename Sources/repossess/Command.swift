@@ -1,0 +1,263 @@
+import CoreGraphics
+import Foundation
+import RePossessCloud
+import RePossessFormat
+import RePossessLibrary
+import RePossessMCP
+import RePossessRender
+import RePossessUSB
+
+let version = "0.1.0"
+
+let usage = """
+    usage: repossess <command> [options]
+
+    Commands:
+      refresh [--usb | --cloud]   Refresh the mirror from the tablet. Without a flag, use USB
+                                  when the tablet is connected by cable, and the cloud otherwise.
+      status                      Show the library and the last refresh from each source.
+      list                        List the documents: path, pages, text status, modified, and ID.
+      mcp                         Serve the read tools over MCP on standard input and output.
+
+    Commands for checking the renderer:
+      render <id> <page> --out <file.png> [--scale <pixels per page pixel>]
+      export-pdf <id> --out <file.pdf>
+                                  Download the PDF that the tablet renders, over USB.
+      layout <id> <page>          Print the laid-out text lines and stroke groups as JSON.
+
+    Options:
+      --library <folder>          The library folder. The default is $REPOSSESS_LIBRARY,
+                                  or ~/Library/Application Support/rePossess.
+      --rmdoc <file>              For render and layout: read this rmdoc instead of the library.
+    """
+
+struct UsageError: Error, CustomStringConvertible {
+    var description: String
+    init(_ message: String) { description = message }
+}
+
+/// The parsed command line.
+struct Arguments {
+    var command: String
+    var positional: [String] = []
+    var options: [String: String] = [:]
+    var flags: Set<String> = []
+
+    static let valued: Set<String> = ["--library", "--out", "--scale", "--rmdoc"]
+
+    init(_ arguments: [String]) throws {
+        guard let first = arguments.first else { throw UsageError(usage) }
+        command = first
+        var rest = arguments.dropFirst()
+        while let argument = rest.popFirst() {
+            if Self.valued.contains(argument) {
+                guard let value = rest.popFirst() else { throw UsageError("\(argument) needs a value") }
+                options[argument] = value
+            } else if argument.hasPrefix("--") {
+                flags.insert(argument)
+            } else {
+                positional.append(argument)
+            }
+        }
+    }
+}
+
+func libraryRoot(_ arguments: Arguments) -> URL {
+    if let path = arguments.options["--library"] ?? ProcessInfo.processInfo.environment["REPOSSESS_LIBRARY"] {
+        return URL(filePath: (path as NSString).expandingTildeInPath, directoryHint: .isDirectory)
+    }
+    return Library.defaultRoot
+}
+
+func printError(_ message: String) {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+}
+
+/// Refreshes from a source; `auto` uses USB when the tablet's USB network is present
+/// and its web interface answers, and the cloud otherwise.
+func refresh(
+    _ library: Library,
+    _ source: RefreshSource,
+    session: CloudSession,
+    progress: @escaping @Sendable (String) -> Void
+) async throws -> [RefreshReport] {
+    switch source {
+    case .usb:
+        return [try await library.refreshUSB(progress: progress)]
+    case .cloud:
+        return [try await library.refreshCloud(session: session, progress: progress)]
+    case .auto:
+        if USBNetwork.isPresent() {
+            do {
+                return [try await library.refreshUSB(progress: progress)]
+            } catch USBError.interfaceOff {
+                progress("The tablet is connected, but its USB web interface is off; using the cloud.")
+            }
+        }
+        return [try await library.refreshCloud(session: session, progress: progress)]
+    }
+}
+
+func describe(_ report: RefreshReport) -> String {
+    var lines = [
+        "Source: \(report.source == .usb ? "USB" : "cloud")",
+        "Documents listed: \(report.listed)",
+        "Downloaded: \(report.downloaded)",
+        "Unchanged: \(report.unchanged)",
+        "Removed: \(report.removed)",
+        "Requests: \(report.requests)",
+        "Bytes: \(report.bytes)",
+        String(format: "Seconds: %.2f", report.seconds),
+    ]
+    if !report.failed.isEmpty {
+        lines.append("Failed: \(report.failed.count)")
+        lines += report.failed.map { "  \($0)" }
+    }
+    if let stopped = report.stoppedBy { lines.append("Stopped: \(stopped)") }
+    return lines.joined(separator: "\n")
+}
+
+/// A page for `render` and `layout`: from the library, or from an rmdoc file.
+func loadScene(_ arguments: Arguments) throws -> PageScene {
+    guard arguments.positional.count == 2, let pageNo = Int(arguments.positional[1]) else {
+        throw UsageError("give a document ID and a page number")
+    }
+    let id = arguments.positional[0]
+    let library: Library
+    if let rmdoc = arguments.options["--rmdoc"] {
+        let root = FileManager.default.temporaryDirectory.appending(path: "repossess-\(UUID().uuidString)")
+        library = try Library(root: root)
+        let archive = try RmdocArchive(data: Data(contentsOf: URL(filePath: rmdoc)))
+        let folder = try archive.unpack(into: library.root.appending(path: "documents/\(id)"), as: id)
+        try library.importForChecking(folder)
+    } else {
+        library = try Library(root: libraryRoot(arguments))
+    }
+    let loader = PageLoader(library: library)
+    let document = try loader.document(id)
+    return try loader.scene(document, try loader.page(document, pageNo))
+}
+
+@main
+struct Repossess {
+    static func main() async {
+        do {
+            try await run(Array(CommandLine.arguments.dropFirst()))
+        } catch let error as UsageError {
+            printError(error.description)
+            exit(64)
+        } catch {
+            printError("repossess: \(error)")
+            exit(1)
+        }
+    }
+
+    static func run(_ argv: [String]) async throws {
+        let arguments = try Arguments(argv)
+        switch arguments.command {
+        case "refresh":
+            let usb = arguments.flags.contains("--usb")
+            let cloud = arguments.flags.contains("--cloud")
+            guard !(usb && cloud) else { throw UsageError("give --usb or --cloud, not both") }
+            let library = try Library(root: libraryRoot(arguments))
+            let reports = try await refresh(
+                library,
+                usb ? .usb : (cloud ? .cloud : .auto),
+                session: CloudSession(),
+                progress: { printError($0) }
+            )
+            print(reports.map(describe).joined(separator: "\n\n"))
+            if reports.contains(where: { $0.stoppedBy != nil }) { exit(2) }
+
+        case "status":
+            let library = try Library(root: libraryRoot(arguments))
+            let status = try library.status()
+            print("Library: \(status.root.path)")
+            print("Documents: \(status.documents) in \(status.folders) folders, \(status.pages) pages")
+            for source in [Source.usb, .cloud] {
+                let name = source == .usb ? "USB" : "Cloud"
+                let when = status.lastRefresh[source].map { $0.formatted(.iso8601) } ?? "never"
+                print("\(name) refresh: \(when)")
+                if let error = status.lastError[source] { print("\(name) error: \(error)") }
+            }
+            print("USB network present: \(USBNetwork.isPresent() ? "yes" : "no")")
+            print("Cloud device token in the Keychain: \(DeviceTokenKeychain.exists() ? "yes" : "no")")
+
+        case "list":
+            let library = try Library(root: libraryRoot(arguments))
+            for document in try library.documents() {
+                let modified = document.modified.map { $0.formatted(.iso8601) } ?? ""
+                print(
+                    [document.path, "\(document.pageCount)", document.contentStatus.rawValue, modified, document.id]
+                        .joined(separator: "\t")
+                )
+            }
+
+        case "mcp":
+            let library = try Library(root: libraryRoot(arguments))
+            let session = CloudSession()
+            let tools = ReadTools(
+                library: library,
+                refresh: { source in
+                    try await refresh(library, source, session: session, progress: { printError($0) })
+                }
+            )
+            try await serveMCP(tools: tools, version: version)
+
+        case "render":
+            guard let out = arguments.options["--out"] else { throw UsageError("render needs --out") }
+            let scene = try loadScene(arguments)
+            let image: RenderedImage
+            if let scale = arguments.options["--scale"].flatMap(Double.init) {
+                image = try PageRenderer.render(
+                    scene,
+                    maxWidth: scene.width * scale,
+                    maxHeight: scene.height * scale
+                )
+            } else {
+                image = try PageRenderer.render(scene, maxWidth: ReadTools.imageWidth, maxHeight: ReadTools.imageHeight)
+            }
+            try image.png.write(to: URL(filePath: out))
+            print("\(image.width) x \(image.height) pixels, \(image.png.count) bytes")
+            for warning in scene.warnings { printError("warning: \(warning)") }
+
+        case "export-pdf":
+            guard let out = arguments.options["--out"], arguments.positional.count == 1 else {
+                throw UsageError("export-pdf needs a document ID and --out")
+            }
+            let start = Date()
+            let data = try await USBClient().pdf(id: arguments.positional[0])
+            try data.write(to: URL(filePath: out))
+            print(String(format: "%d bytes in %.2f seconds", data.count, Date().timeIntervalSince(start)))
+
+        case "layout":
+            let scene = try loadScene(arguments)
+            var lines: [[String: Any]] = []
+            for line in scene.layout?.lines ?? [] {
+                lines.append([
+                    "text": line.plain, "x": Double(line.x), "baseline": Double(line.baseline),
+                    "style": line.style.name,
+                ])
+            }
+            let groups = scene.strokeGroups.map { group -> [String: Any] in
+                [
+                    "x": Double(group.bounds.minX), "y": Double(group.bounds.minY),
+                    "width": Double(group.bounds.width), "height": Double(group.bounds.height),
+                    "anchored": group.anchored, "strokes": group.strokes,
+                ]
+            }
+            let object: [String: Any] = [
+                "width": Double(scene.width), "height": Double(scene.height), "lines": lines, "groups": groups,
+                "warnings": scene.warnings,
+            ]
+            let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            print(String(decoding: data, as: UTF8.self))
+
+        case "help", "--help", "-h":
+            print(usage)
+
+        default:
+            throw UsageError("unknown command \(arguments.command)\n\n\(usage)")
+        }
+    }
+}
