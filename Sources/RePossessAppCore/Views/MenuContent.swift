@@ -91,8 +91,10 @@ struct MenuBarLabel: View {
     @State private var handled = 0
 
     var body: some View {
-        Image(systemName: model.refreshing ? "arrow.triangle.2.circlepath" : "scribble.variable")
+        // One symbol in every state, so that the item keeps its shape; the menu says when a refresh runs.
+        Image(systemName: "scribble.variable")
             .accessibilityLabel("rePossess")
+            .accessibilityValue(model.refreshing ? "Refreshing" : "")
             .onAppear(perform: handle)
             .onChange(of: router.requests) { handle() }
     }
