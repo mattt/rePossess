@@ -33,3 +33,19 @@ codesign --verify --strict "$binary"
 codesign --display --requirements - "$binary"
 echo "Signed $binary"
 """
+
+[tasks."build:app"]
+description = "Build rePossess.app with the repossess command inside, and sign both"
+run = "scripts/app.sh build"
+
+[tasks."sign:app"]
+description = "Sign the assembled rePossess.app again"
+run = "scripts/app.sh sign"
+
+[tasks."run:app"]
+description = "Open rePossess.app; pass --library <folder> and --no-keychain after --"
+run = "scripts/app.sh run"
+
+[tasks."quit:app"]
+description = "Quit rePossess.app"
+run = "scripts/app.sh quit"
