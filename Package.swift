@@ -13,11 +13,15 @@ let package = Package(
         .library(name: "RePossessUSB", targets: ["RePossessUSB"]),
         .library(name: "RePossessLibrary", targets: ["RePossessLibrary"]),
         .library(name: "RePossessRender", targets: ["RePossessRender"]),
+        .library(name: "RePossessRecognize", targets: ["RePossessRecognize"]),
         .library(name: "RePossessMCP", targets: ["RePossessMCP"]),
         .executable(name: "repossess", targets: ["repossess"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1")
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1"),
+        // Handwriting recognition through configurable providers (Mattt, 2026-10-25).
+        // Only the MLX trait: the system model and the cloud providers need no trait.
+        .package(url: "https://github.com/huggingface/AnyLanguageModel.git", exact: "1.1.0", traits: ["MLX"]),
     ],
     targets: [
         .target(
@@ -36,6 +40,16 @@ let package = Package(
             dependencies: ["RePossessFormat"]
         ),
         .target(
+            name: "RePossessRecognize",
+            dependencies: [
+                "RePossessFormat",
+                "RePossessCloud",
+                "RePossessLibrary",
+                "RePossessRender",
+                .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
+            ]
+        ),
+        .target(
             name: "RePossessMCP",
             dependencies: [
                 "RePossessFormat",
@@ -43,6 +57,7 @@ let package = Package(
                 "RePossessUSB",
                 "RePossessLibrary",
                 "RePossessRender",
+                "RePossessRecognize",
                 .product(name: "MCP", package: "swift-sdk"),
             ]
         ),
@@ -54,6 +69,7 @@ let package = Package(
                 "RePossessUSB",
                 "RePossessLibrary",
                 "RePossessRender",
+                "RePossessRecognize",
                 "RePossessMCP",
             ]
         ),
@@ -66,12 +82,17 @@ let package = Package(
         ),
         .testTarget(name: "RePossessRenderTests", dependencies: ["RePossessRender", "RePossessFormat"]),
         .testTarget(
+            name: "RePossessRecognizeTests",
+            dependencies: ["RePossessRecognize", "RePossessLibrary", "RePossessFormat", "RePossessRender"]
+        ),
+        .testTarget(
             name: "RePossessMCPTests",
             dependencies: [
                 "RePossessMCP",
                 "RePossessLibrary",
                 "RePossessFormat",
                 "RePossessUSB",
+                "RePossessRecognize",
                 .product(name: "MCP", package: "swift-sdk"),
             ]
         ),
