@@ -362,7 +362,10 @@ extension Library {
         try remove(ids: gone)
         report.removed = gone.count
         report.listed = try versions().filter { listed.contains($0.key) && $0.value.isVisibleDocument }.count
-        try setState(["cloud.root_hash": root.hash, "cloud.generation": String(root.generation)])
+        try setState([
+            "cloud.root_hash": root.hash, "cloud.generation": String(root.generation),
+            "cloud.schema_version": root.schemaVersion.map(String.init),
+        ])
     }
 
     /// What reading one root entry found. Child tasks read; the refresh writes, one result at a time.

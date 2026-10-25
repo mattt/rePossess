@@ -107,6 +107,8 @@ public struct LibraryStatus: Sendable, Equatable {
     public var lastErrorAt: [Source: Date]
     public var cloudRootHash: String?
     public var cloudGeneration: Int64?
+    /// The schema version of the account's root at the last cloud refresh that read it.
+    public var cloudSchemaVersion: Int?
 
     /// The source of the most recent refresh that finished, and its time.
     public var latestRefresh: (source: Source, date: Date)? {
@@ -420,7 +422,8 @@ public final class Library: Sendable {
             lastError: lastError,
             lastErrorAt: lastErrorAt,
             cloudRootHash: state["cloud.root_hash"],
-            cloudGeneration: state["cloud.generation"].flatMap(Int64.init)
+            cloudGeneration: state["cloud.generation"].flatMap(Int64.init),
+            cloudSchemaVersion: state["cloud.schema_version"].flatMap { Int($0) }
         )
     }
 

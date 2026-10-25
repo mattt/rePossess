@@ -36,7 +36,9 @@ let usage = """
                                   anywhere, so that macOS can ask once for permission.
 
     Commands for checking the renderer:
-      render <id> <page> --out <file.png> [--scale <pixels per page pixel>]
+      render <id> <page> --out <file.png> [--scale <pixels per page pixel>] [--own]
+                                  A page as fetch_page_image draws it: from the tablet's PDF export
+                                  when it is current. --own uses rePossess's own rendering.
       export-pdf <id> --out <file.pdf>
                                   Download the PDF that the tablet renders, over USB.
       layout <id> <page>          Print the laid-out text lines and stroke groups as JSON.
@@ -158,7 +160,8 @@ func describe(_ report: RefreshReport) -> String {
 }
 
 /// A page for `render` and `layout`: from the library, or from an rmdoc file.
-func loadScene(_ arguments: Arguments) throws -> PageScene {
+/// With `tablet`, `render` takes the tablet's PDF export when it is current, as `fetch_page_image` does.
+func loadScene(_ arguments: Arguments, tablet: Bool = false) throws -> (scene: PageScene, note: String?) {
     guard arguments.positional.count == 2, let pageNo = Int(arguments.positional[1]) else {
         throw UsageError("give a document ID and a page number")
     }
@@ -175,7 +178,10 @@ func loadScene(_ arguments: Arguments) throws -> PageScene {
     }
     let loader = PageLoader(library: library)
     let document = try loader.document(id)
-    return try loader.scene(document, try loader.page(document, pageNo))
+    let page = try loader.page(document, pageNo)
+    guard tablet else { return (try loader.scene(document, page), nil) }
+    let (scene, source) = try loader.rendering(document, page)
+    return (scene, source.note(date: { $0.map { $0.formatted(.iso8601) } ?? "" }))
 }
 
 @main
@@ -230,6 +236,9 @@ struct Repossess {
             print("USB network present: \(USBNetwork.isPresent() ? "yes" : "no")")
             let service = DeviceTokenKeychain.pairedService()
             print("Cloud device token in the Keychain: \(service.map { "yes, under \"\($0)\"" } ?? "no")")
+            if let schema = status.cloudSchemaVersion {
+                print("Cloud root schema at the last cloud refresh: \(schema)")
+            }
             let counts = try library.pushCounts()
             let queue = [PushStatus.pending, .unknown, .failed, .sent].compactMap { status in
                 counts[status].map { "\($0) \(status.rawValue)" }
@@ -283,7 +292,8 @@ struct Repossess {
                 let notebook = try MarkdownNotebook(title: title, markdown: markdown, paginate: paginate)
                 try notebook.rmdoc.write(to: URL(filePath: out))
                 print(
-                    "Wrote \(out): \(notebook.pageCount) pages, \(notebook.paragraphCount) paragraphs. Nothing was sent."
+                    "Wrote \(out): \(notebook.pageCount == 1 ? "1 page" : "\(notebook.pageCount) pages"), "
+                        + "\(notebook.paragraphCount) paragraphs. Nothing was sent."
                 )
                 return
             }
@@ -361,7 +371,7 @@ struct Repossess {
 
         case "render":
             guard let out = arguments.options["--out"] else { throw UsageError("render needs --out") }
-            let scene = try loadScene(arguments)
+            let (scene, note) = try loadScene(arguments, tablet: !arguments.flags.contains("--own"))
             let image: RenderedImage
             if let scale = arguments.options["--scale"].flatMap(Double.init) {
                 image = try PageRenderer.render(
@@ -378,6 +388,7 @@ struct Repossess {
             }
             try image.png.write(to: URL(filePath: out))
             print("\(image.width) x \(image.height) pixels, \(image.png.count) bytes")
+            if let note { print(note) }
             for warning in scene.warnings { printError("warning: \(warning)") }
 
         case "export-pdf":
@@ -390,7 +401,7 @@ struct Repossess {
             print(String(format: "%d bytes in %.2f seconds", data.count, Date().timeIntervalSince(start)))
 
         case "layout":
-            let scene = try loadScene(arguments)
+            let scene = try loadScene(arguments).scene
             var lines: [[String: Any]] = []
             for line in scene.layout?.lines ?? [] {
                 lines.append([
