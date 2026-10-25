@@ -109,6 +109,18 @@ func handwritingTools(
         #expect(status["page_images_go_to"] as? String == "nowhere: recognition runs on this Mac")
     }
 
+    @Test func theOverviewSaysWhichHandwritingHasText() async throws {
+        let tools = try await handwritingTools(reader: FixedReader("Tomatoes along the south fence"))
+        let before = texts(await call(tools, "get_overview"))[0]
+        #expect(before.contains("1 pages of handwriting are not recognized yet; recognize_pages reads them"))
+        _ = await call(tools, "recognize_pages", ["id": "doc-ink"])
+        let after = texts(await call(tools, "get_overview"))[0]
+        #expect(after.contains("Handwriting on 1 of 1 pages is recognized as text; fetch_document returns it."))
+        #expect(after.contains("Starts: Tomatoes along the south fence"))
+        let off = texts(await call(try await handwritingTools(nil), "get_overview"))[0]
+        #expect(off.contains("Handwriting or drawings without text; fetch_page_image shows a page."))
+    }
+
     @Test func aTypedPageKeepsItsTextAndAddsTheHandwriting() async throws {
         let tools = try await handwritingTools(reader: FixedReader("Ask about compost"))
         _ = await call(tools, "recognize_pages", ["id": "doc-typed", "pages": ["start": 2, "end": 2]])

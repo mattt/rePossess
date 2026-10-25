@@ -2,13 +2,15 @@ import Foundation
 import MCP
 import RePossessFormat
 import RePossessLibrary
+import RePossessRecognize
 import RePossessRender
 
 extension RePossessTools {
     // MARK: get_overview
 
-    func overview(_ arguments: [String: Value]) throws -> CallTool.Result {
+    func overview(_ arguments: [String: Value]) async throws -> CallTool.Result {
         let limit = min(max(try Self.integer(arguments, "limit") ?? 10, 1), 50)
+        let configuration = await shownConfiguration()
         let status = try library.status()
         let documents = try library.documents()
         var out = "# reMarkable library\n\n"
@@ -35,8 +37,9 @@ extension RePossessTools {
                 out += "   This document could not be read: \(error)\n"
             } else if !document.summary.isEmpty {
                 out += "   Starts: \(document.summary)\n"
-            } else if document.contentStatus != .text {
-                out += "   Handwriting or drawings without text; fetch_page_image shows a page.\n"
+            }
+            if document.error == nil, document.contentStatus != .text || document.summary.isEmpty {
+                out += try handwritingSummary(document, configuration)
             }
         }
         out += """
@@ -46,6 +49,41 @@ extension RePossessTools {
 
             """
         return Self.text(out)
+    }
+
+    /// A line for the overview about a document's handwriting: recognized text and its first words,
+    /// pages that wait for the recognizer, or the page images.
+    func handwritingSummary(_ document: LibraryItem, _ configuration: RecognizerConfiguration?) throws -> String {
+        let ink = try library.pages(of: document.id).filter { $0.strokeHash != nil }
+        guard !ink.isEmpty else {
+            return document.summary.isEmpty && document.contentStatus != .text
+                ? "   Pages without text; fetch_page_image shows a page.\n" : ""
+        }
+        guard let configuration else {
+            return "   Handwriting or drawings without text; fetch_page_image shows a page.\n"
+        }
+        var texts: [String] = []
+        var waiting = 0
+        for page in ink {
+            switch try handwriting(page, configuration) {
+            case .recognized(let r) where r.status == .text: texts.append(r.text)
+            case .waiting: waiting += 1
+            default: break
+            }
+        }
+        var line = ""
+        if !texts.isEmpty {
+            let words = texts.joined(separator: " ").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            let start = words.count > 160 ? String(words.prefix(159)) + "…" : words
+            line += "   Handwriting on \(texts.count) of \(ink.count) pages is recognized as text; "
+            line += "fetch_document returns it. Starts: \(start)\n"
+        }
+        if waiting > 0 {
+            line += "   \(waiting) pages of handwriting are not recognized yet; recognize_pages reads them, "
+            line += "and fetch_page_image shows a page.\n"
+        }
+        return line.isEmpty
+            ? "   Handwriting or drawings that the recognizer could not read; fetch_page_image shows a page.\n" : line
     }
 
     func refreshSentence(_ status: LibraryStatus) -> String {

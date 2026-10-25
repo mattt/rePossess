@@ -364,7 +364,7 @@ public struct RePossessTools: Sendable {
         let arguments = params.arguments ?? [:]
         do {
             switch params.name {
-            case "get_overview": return try overview(arguments)
+            case "get_overview": return try await overview(arguments)
             case "list_documents": return try listDocuments(arguments)
             case "search_documents": return try searchDocuments(arguments)
             case "fetch_document": return try await fetchDocument(arguments)
