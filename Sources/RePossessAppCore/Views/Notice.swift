@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// Every pane shows results the same way: a symbol with the text, so that color is not the only sign,
 /// and an error's full text behind a "Details" disclosure.
-struct Notice: Equatable {
+struct Notice: Equatable, Identifiable {
     enum Kind: Equatable {
         case done, failed, info
     }
@@ -13,6 +13,9 @@ struct Notice: Equatable {
     var text: String
     /// The full technical text, such as an error's description.
     var details: String?
+
+    /// The notice's identity in a list: its error when it has one, so that an age in its text can change.
+    var id: String { details ?? text }
 
     static func done(_ text: String) -> Notice { Notice(kind: .done, text: text) }
     static func info(_ text: String) -> Notice { Notice(kind: .info, text: text) }
@@ -39,9 +42,14 @@ struct Notice: Equatable {
     }
 }
 
-/// A ``Notice``, which VoiceOver announces when it appears or changes.
+/// A ``Notice``, which VoiceOver announces when an action reports it or a problem changes.
+///
+/// A persistent notice describes a state that the pane shows whenever it opens, such as the last
+/// refresh's error. It is not announced when it appears, and its age in the text, which changes
+/// every minute, does not count as a change; only a new kind or a new error does.
 struct NoticeView: View {
     let notice: Notice
+    var persistent = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -62,8 +70,13 @@ struct NoticeView: View {
                 }
             }
         }
-        .onAppear { announce() }
-        .onChange(of: notice) { announce() }
+        .onAppear { if !persistent { announce() } }
+        .onChange(of: identity) { announce() }
+    }
+
+    /// What counts as a change for an announcement.
+    private var identity: String {
+        "\(notice.kind) \(persistent ? notice.details ?? notice.text : notice.text)"
     }
 
     private func announce() {

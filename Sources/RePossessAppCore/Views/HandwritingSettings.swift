@@ -51,7 +51,10 @@ struct RecognizerSettings: View {
                     }
                 }
                 if let failure = model.recognitionFailure {
-                    NoticeView(notice: Notice(kind: .failed, text: "The last recognition failed.", details: failure))
+                    NoticeView(
+                        notice: Notice(kind: .failed, text: "The last recognition failed.", details: failure),
+                        persistent: true
+                    )
                 }
                 if let notice { NoticeView(notice: notice) }
             } header: {
@@ -337,6 +340,7 @@ struct APIKeyFields: View {
         }
         HStack {
             SecureField("New key", text: $key, prompt: Text("Paste the key"))
+                .accessibilityLabel("New \(provider.owner) API key")
                 .onSubmit(save)
             Button("Save API Key", action: save)
                 .disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.options.usesKeychain)
@@ -407,10 +411,16 @@ struct ModelSection: View {
                 }
             }
             if case .failed(let message) = state {
-                NoticeView(notice: Notice(kind: .failed, text: "The download failed.", details: message))
+                NoticeView(
+                    notice: Notice(kind: .failed, text: "The download failed.", details: message),
+                    persistent: true
+                )
             }
             if case .finished = state {
-                NoticeView(notice: .done("The model is on this Mac, and every file matches its pinned SHA-256."))
+                NoticeView(
+                    notice: .done("The model is on this Mac, and every file matches its pinned SHA-256."),
+                    persistent: true
+                )
             }
             DisclosureGroup("Details") {
                 VStack(alignment: .leading, spacing: 4) {

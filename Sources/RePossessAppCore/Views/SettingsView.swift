@@ -99,7 +99,7 @@ struct GeneralSettings: View {
                         Text("Refreshing…").foregroundStyle(.secondary)
                     }
                 }
-                ForEach(model.refreshNotices, id: \.text) { NoticeView(notice: $0) }
+                ForEach(model.refreshNotices) { NoticeView(notice: $0, persistent: true) }
             } header: {
                 Text("Refresh")
             } footer: {
@@ -147,7 +147,10 @@ struct GeneralSettings: View {
                 }
                 .accessibilityLabel("Show the library folder in Finder")
                 if let error = model.libraryError {
-                    NoticeView(notice: Notice(kind: .failed, text: "The library could not be opened.", details: error))
+                    NoticeView(
+                        notice: Notice(kind: .failed, text: "The library could not be opened.", details: error),
+                        persistent: true
+                    )
                 }
             } header: {
                 Text("Local Library")

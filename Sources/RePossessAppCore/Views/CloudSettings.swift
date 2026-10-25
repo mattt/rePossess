@@ -38,6 +38,7 @@ struct CloudSettings: View {
             }
         }
         .formStyle(.grouped)
+        .defaultFocus($codeFocused, true)
         .confirmationDialog("Unpair rePossess?", isPresented: $confirmUnpair) {
             Button("Unpair", role: .destructive) { show(model.unpair()) }
             Button("Cancel", role: .cancel) {}
@@ -59,7 +60,8 @@ struct CloudSettings: View {
             if let error = library?.lastError[.cloud] {
                 let when = library?.lastErrorAt[.cloud].map { " " + StatusSnapshot.age($0, now: model.snapshot.now) }
                 NoticeView(
-                    notice: Notice(kind: .failed, text: "The last cloud refresh failed\(when ?? "").", details: error)
+                    notice: Notice(kind: .failed, text: "The last cloud refresh failed\(when ?? "").", details: error),
+                    persistent: true
                 )
             }
             Button("Unpair…", role: .destructive) { confirmUnpair = true }
@@ -94,6 +96,7 @@ struct CloudSettings: View {
                 .font(.body.monospaced())
                 .focused($codeFocused)
                 .onSubmit(pair)
+                .accessibilityHint("Eight letters or digits from my.remarkable.com")
             HStack(spacing: 8) {
                 Button("Pair", action: pair)
                     .disabled(!PairingCode.isPlausible(code) || pairing)
