@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+.swiftpm/
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# Tablet captures stay local; see AGENTS.md
+captures/

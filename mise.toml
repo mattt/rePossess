@@ -1,0 +1,19 @@
+[tasks.build]
+description = "Build the Swift package"
+run = "swift build"
+
+[tasks.test]
+description = "Run the Swift package tests"
+run = "swift test"
+
+[tasks.lint]
+description = "Lint the Swift sources with swift format"
+run = "swift format lint --strict --recursive Package.swift Sources Tests"
+
+[tasks.format]
+description = "Format the Swift sources with swift format"
+run = "swift format --in-place --recursive Package.swift Sources Tests"
+
+[tasks.check]
+description = "Lint, build, and test"
+depends = ["lint", "build", "test"]
