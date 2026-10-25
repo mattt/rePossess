@@ -4,7 +4,7 @@ import RePossessFormat
 import RePossessLibrary
 import RePossessRender
 
-extension ReadTools {
+extension RePossessTools {
     // MARK: get_overview
 
     func overview(_ arguments: [String: Value]) throws -> CallTool.Result {
@@ -28,7 +28,8 @@ extension ReadTools {
         let recent = documents.sorted { ($0.modified ?? .distantPast) > ($1.modified ?? .distantPast) }.prefix(limit)
         for (i, document) in recent.enumerated() {
             out += "\n\(i + 1). \(document.name)\n"
-            out += "   id: \(document.id) · path: \(document.path) · \(document.pageCount) pages"
+            out +=
+                "   id: \(document.id) · \(document.fileType ?? "notebook") · path: \(document.path) · \(document.pageCount) pages"
             out += " · modified \(Self.date(document.modified)) · \(document.contentStatus.rawValue)\n"
             if let error = document.error {
                 out += "   This document could not be read: \(error)\n"
@@ -78,6 +79,8 @@ extension ReadTools {
         let parent: String
         let path: String
         let modified: String
+        /// `notebook`, `pdf`, or `epub`, from the document's `.content` file.
+        let file_type: String
         let page_count: Int
         let content_status: String
         let summary: String
@@ -100,6 +103,7 @@ extension ReadTools {
             parent: item.parent,
             path: item.path,
             modified: date(item.modified),
+            file_type: item.fileType ?? "notebook",
             page_count: item.pageCount,
             content_status: item.contentStatus.rawValue,
             summary: item.error.map { "This document could not be read: \($0)" } ?? item.summary,
@@ -128,6 +132,8 @@ extension ReadTools {
         let id: String
         let name: String
         let path: String
+        let file_type: String
+        let content_status: String
         let match: String
         let page_no: Int?
         let snippet: String
@@ -150,6 +156,8 @@ extension ReadTools {
                 id: $0.item.id,
                 name: $0.item.name,
                 path: $0.item.path,
+                file_type: $0.item.fileType ?? "notebook",
+                content_status: $0.item.contentStatus.rawValue,
                 match: $0.match.rawValue,
                 page_no: $0.pageNo,
                 snippet: $0.snippet
@@ -264,10 +272,11 @@ extension ReadTools {
         let document = try loader.document(id)
         guard let pageNo = try Self.integer(arguments, "page_no") else { throw ToolError("page_no is required.") }
         let page = try loader.page(document, pageNo)
-        let scene = try loader.scene(document, page)
+        let (scene, source) = try loader.rendering(document, page)
         let image = try PageRenderer.render(scene, maxWidth: Self.imageWidth, maxHeight: Self.imageHeight)
         var note = "\(document.name), page \(pageNo) of \(document.pageCount). "
         note += "PNG, \(image.width) x \(image.height) pixels, \(image.png.count) bytes. "
+        note += source.note(date: Self.date) + " "
         note += "Copied from \(Self.sourceName(document.source)). " + mirrorSentence(try library.status())
         let screens = scene.height / scene.screenHeight
         if screens > 1.05 {
@@ -299,6 +308,9 @@ extension ReadTools {
         let chunk_count: Int
         let chunks: [ChunkEntry]
         let next_idx: Int?
+        /// `tablet` when the strips come from the tablet's own PDF export, and `repossess` otherwise.
+        let rendering: String
+        let rendering_note: String
         let mirror: MirrorEntry?
     }
 
@@ -307,7 +319,7 @@ extension ReadTools {
         let document = try loader.document(id)
         guard let pageNo = try Self.integer(arguments, "page_no") else { throw ToolError("page_no is required.") }
         let page = try loader.page(document, pageNo)
-        let scene = try loader.scene(document, page)
+        let (scene, source) = try loader.rendering(document, page)
         let stripHeight = scene.screenHeight / CGFloat(Self.chunksPerScreen)
         let count = max(Int((scene.height / stripHeight).rounded(.up)), 1)
         let afterIdx = max(try Self.integer(arguments, "after_idx") ?? 0, 0)
@@ -347,6 +359,8 @@ extension ReadTools {
             chunk_count: count,
             chunks: chunks,
             next_idx: last < count ? last : nil,
+            rendering: source.name,
+            rendering_note: source.note(date: Self.date),
             mirror: try mirror()
         )
         let encoder = JSONEncoder()
@@ -383,9 +397,51 @@ extension ReadTools {
             if !report.failed.isEmpty {
                 out += "\(report.failed.count) documents could not be read.\n"
             }
+            if report.exportsDownloaded > 0 || report.exportsFailed > 0 {
+                out += "The tablet's PDF exports: \(report.exportsDownloaded) downloaded"
+                out += report.exportsFailed > 0 ? ", \(report.exportsFailed) not available.\n" : ".\n"
+            }
             if let stopped = report.stoppedBy { out += "The refresh stopped early: \(stopped)\n" }
+            for push in report.pushes {
+                let result = PushResult(push)
+                out += "Push \"\(push.title)\" (\(push.id)): \(result.status). \(result.message)\n"
+            }
         }
         return Self.text(out)
+    }
+
+    // MARK: push_markdown and push_file
+
+    func pushMarkdown(_ arguments: [String: Value]) async throws -> CallTool.Result {
+        guard let pusher else { throw ToolError("This server does not send documents to the tablet.") }
+        guard let title = Self.string(arguments, "title") else { throw ToolError("title is required.") }
+        guard let markdown = Self.string(arguments, "markdown") else { throw ToolError("markdown is required.") }
+        let paginate = arguments["paginate"]?.boolValue ?? false
+        do {
+            return try Self.json(try await pusher.pushMarkdown(title: title, markdown: markdown, paginate: paginate))
+        } catch let error as NotebookError {
+            throw ToolError("Nothing was sent: \(error).")
+        } catch let error as PushError {
+            throw ToolError("Nothing was sent: \(error).")
+        }
+    }
+
+    func pushFile(_ arguments: [String: Value]) async throws -> CallTool.Result {
+        guard let pusher else { throw ToolError("This server does not send documents to the tablet.") }
+        let path = Self.string(arguments, "path")
+        let url = Self.string(arguments, "url")
+        guard (path == nil) != (url == nil) else { throw ToolError("Give exactly one of path or url.") }
+        do {
+            return try Self.json(
+                try await pusher.pushFile(path: path, url: url, title: Self.string(arguments, "title"))
+            )
+        } catch let error as NotebookError {
+            throw ToolError("Nothing was sent: \(error).")
+        } catch let error as PushError {
+            throw ToolError("Nothing was sent: \(error).")
+        } catch let error as CocoaError {
+            throw ToolError("Nothing was sent: the file could not be read (\(error.localizedDescription)).")
+        }
     }
 
     // MARK: status
@@ -407,7 +463,24 @@ extension ReadTools {
         let usb: TransportStatus
         let cloud: TransportStatus
         let mirror: MirrorEntry?
+        /// The pushes in each state: `queued`, `unknown`, `sent`, and `failed`.
+        let pushes: [String: Int]
         let recognizer: String
+    }
+
+    func pushCounts() throws -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for (status, count) in try library.pushCounts() {
+            let name =
+                switch status {
+                case .pending: "queued"
+                case .sending, .unknown: "unknown"
+                case .sent: "sent"
+                case .failed: "failed"
+                }
+            counts[name, default: 0] += count
+        }
+        return counts
     }
 
     func status() throws -> CallTool.Result {
@@ -429,6 +502,7 @@ extension ReadTools {
                 usb: transport(.usb, available: usbConnected()),
                 cloud: transport(.cloud, available: cloudPaired()),
                 mirror: mirror(status),
+                pushes: pushCounts(),
                 recognizer: "none: handwriting recognition comes in phase 4; fetch_page_image shows handwriting"
             )
         )

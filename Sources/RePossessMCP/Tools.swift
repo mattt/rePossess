@@ -14,20 +14,23 @@ public enum RefreshSource: String, Sendable {
     case cloud
 }
 
-/// The read tools, with the schemas and rules of the design's "MCP tools" section (spike 7).
+/// The tools, with the schemas and rules of the design's "MCP tools" section (spike 7):
+/// the read tools, and from phase 3 `push_markdown` and `push_file`.
 ///
 /// - Pages are numbered from 1 in every tool.
 /// - A result with `structuredContent` has the same JSON as its only text;
 ///   a result with Markdown or hints has `content` only,
 ///   because Claude Code 2.1.310 showed the model `structuredContent` in place of `content`.
 /// - Errors are `isError` results that say what to call instead.
-public struct ReadTools: Sendable {
+public struct RePossessTools: Sendable {
     public let library: Library
     let loader: PageLoader
     let refresh: @Sendable (RefreshSource) async throws -> [RefreshReport]
     let usbConnected: @Sendable () -> Bool
     let cloudPaired: @Sendable () -> Bool
     let now: @Sendable () -> Date
+    /// Queues and sends pushes; `nil` turns the push tools off.
+    let pusher: Pusher?
 
     /// The most text that one `fetch_document` call returns, in characters.
     /// About 7,500 tokens: under Claude Code's 10,000-token warning
@@ -47,8 +50,10 @@ public struct ReadTools: Sendable {
         refresh: @escaping @Sendable (RefreshSource) async throws -> [RefreshReport],
         usbConnected: @escaping @Sendable () -> Bool = USBNetwork.isPresent,
         cloudPaired: @escaping @Sendable () -> Bool = DeviceTokenKeychain.exists,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        pusher: Pusher? = nil
     ) {
+        self.pusher = pusher
         self.library = library
         self.loader = PageLoader(library: library)
         self.refresh = refresh
@@ -60,6 +65,12 @@ public struct ReadTools: Sendable {
     // MARK: Schemas
 
     static let readOnly = Tool.Annotations(readOnlyHint: true, openWorldHint: false)
+    static let write = Tool.Annotations(
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true
+    )
 
     static let idProperty: Value = [
         "type": "string",
@@ -226,11 +237,80 @@ public struct ReadTools: Sendable {
             annotations: Tool.Annotations(readOnlyHint: true, openWorldHint: true)
         ),
         Tool(
+            name: "push_markdown",
+            title: "Send Markdown to the tablet",
+            description: """
+                Send Markdown to the reMarkable tablet as a new notebook with typed text that the user can edit. \
+                Side effects: every call creates a new document at the top level of the tablet's library; \
+                it never changes or replaces an existing document, so calling it twice makes two copies. \
+                Do not call it again to retry: check the result's status instead. \
+                "sent" means the tablet or reMarkable's cloud has it; "queued" and "unknown" mean rePossess \
+                sends it, or checks whether it arrived, at the next refresh; "failed" means it was refused. \
+                Headings become Title (#) and Subheading (## to ######); bullets, nested bullets, and \
+                task lists keep their styles; emphasis, links, and inline code become plain text; \
+                numbered items keep their numbers; code blocks and tables become plain lines. \
+                Limits: a title of 1 to \(MarkdownNotebook.maxTitleLength) characters on one line, \
+                Markdown of at most \(MarkdownNotebook.maxMarkdownLength) characters, \
+                and at most \(MarkdownNotebook.maxPages) pages.
+                """,
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "title": [
+                        "type": "string", "minLength": 1, "maxLength": .int(MarkdownNotebook.maxTitleLength),
+                        "description": "The document's name on the tablet.",
+                    ],
+                    "markdown": [
+                        "type": "string", "minLength": 1, "maxLength": .int(MarkdownNotebook.maxMarkdownLength),
+                        "description": "The note's text as Markdown.",
+                    ],
+                    "paginate": [
+                        "type": "boolean", "default": false,
+                        "description":
+                            "Start a new page at each ## heading. By default all the text goes on one page, which the tablet makes as long as the text.",
+                    ],
+                ],
+                "required": ["title", "markdown"],
+                "additionalProperties": false,
+            ],
+            annotations: write
+        ),
+        Tool(
+            name: "push_file",
+            title: "Send a PDF or EPUB to the tablet",
+            description: """
+                Send a PDF or EPUB file to the reMarkable tablet as a new document. \
+                Give exactly one of path, a file on this Mac, or url, an https URL that rePossess downloads. \
+                Side effects: every call creates a new document at the top level of the tablet's library; \
+                it never changes or replaces an existing document, so calling it twice makes two copies. \
+                Do not call it again to retry: check the result's status instead. \
+                "sent" means the tablet or reMarkable's cloud has it; "queued" and "unknown" mean rePossess \
+                sends it, or checks whether it arrived, at the next refresh; "failed" means it was refused. \
+                Limits: \(Library.maxPushBytes / 1_000_000) MB, https URLs only, \
+                and a title of at most \(MarkdownNotebook.maxTitleLength) characters.
+                """,
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "path": ["type": "string", "description": "A PDF or EPUB file on this Mac."],
+                    "url": [
+                        "type": "string", "description": "An https URL of a PDF or EPUB. Use instead of path.",
+                    ],
+                    "title": [
+                        "type": "string", "minLength": 1, "maxLength": .int(MarkdownNotebook.maxTitleLength),
+                        "description": "The document's name on the tablet. The default is the file's name.",
+                    ],
+                ],
+                "additionalProperties": false,
+            ],
+            annotations: write
+        ),
+        Tool(
             name: "status",
             title: "Status",
             description: """
                 Report how rePossess reaches the tablet, each source's last successful refresh and last error, \
-                the age of the mirror, the number of documents, and the handwriting recognizer.
+                the age of the mirror, the number of documents, the pushes that wait, and the handwriting recognizer.
                 """,
             inputSchema: ["type": "object", "properties": [:], "additionalProperties": false],
             annotations: readOnly
@@ -250,6 +330,8 @@ public struct ReadTools: Sendable {
             case "fetch_page_image": return try fetchPageImage(arguments)
             case "fetch_page_chunks": return try fetchPageChunks(arguments)
             case "refresh_documents": return try await refreshDocuments(arguments)
+            case "push_markdown": return try await pushMarkdown(arguments)
+            case "push_file": return try await pushFile(arguments)
             case "status": return try status()
             default: throw ToolError("Unknown tool \(params.name).")
             }

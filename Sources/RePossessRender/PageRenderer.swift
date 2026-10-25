@@ -102,6 +102,25 @@ public struct PageScene {
         height = ceil(height)
     }
 
+    /// A page of the tablet's own PDF export, which rePossess draws as it is.
+    ///
+    /// The export holds one PDF page for each page of the document,
+    /// and a page longer than the screen is one taller PDF page,
+    /// at 72/227 points per tablet pixel (1404 pixels are 445 points).
+    /// Its fonts draw the page; rePossess does not extract them.
+    ///
+    /// - Parameters:
+    ///   - isPDFPage: Whether the document's page shows a page of its own PDF,
+    ///     in which case a screen is the whole page, as in rePossess's own rendering.
+    ///     Otherwise a screen is 4:3 to the width, as on the tablet's display.
+    public init(exportPage: CGPDFPage, isPDFPage: Bool = false) {
+        pdfPage = exportPage
+        let size = Self.pdfSize(exportPage) ?? Self.defaultSize
+        width = size.width
+        height = ceil(size.height)
+        screenHeight = isPDFPage ? height : min(height, ceil(width * 4 / 3))
+    }
+
     /// The special anchor IDs that rmc treats as the top and the bottom of the text.
     static let topAnchor = CrdtId(0, 281_474_976_710_654)
     static let bottomAnchor = CrdtId(0, 281_474_976_710_655)

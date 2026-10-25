@@ -10,7 +10,7 @@ import Testing
 
 /// A library with invented documents: a typed notebook with a page of ink,
 /// a handwritten notebook, and a long typed notebook.
-func stockedTools(now: @escaping @Sendable () -> Date = Date.init) async throws -> ReadTools {
+func stockedTools(now: @escaping @Sendable () -> Date = Date.init) async throws -> RePossessTools {
     let tablet = FakeTablet()
     var typed1 = PageBuilder()
     typed1.paragraphs = [StyledParagraph(.heading, "Seed order"), StyledParagraph(.plain, "Marigolds for the beds.")]
@@ -54,7 +54,7 @@ func stockedTools(now: @escaping @Sendable () -> Date = Date.init) async throws 
         root: FileManager.default.temporaryDirectory.appending(path: "repossess-mcp-\(UUID().uuidString)")
     )
     _ = try await library.refreshUSB(client: USBClient(transport: tablet, checkInterface: { true }))
-    return ReadTools(
+    return RePossessTools(
         library: library,
         refresh: { source in
             var report = RefreshReport(source: source == .cloud ? .cloud : .usb)
@@ -68,7 +68,7 @@ func stockedTools(now: @escaping @Sendable () -> Date = Date.init) async throws 
     )
 }
 
-func call(_ tools: ReadTools, _ name: String, _ arguments: [String: Value] = [:]) async -> CallTool.Result {
+func call(_ tools: RePossessTools, _ name: String, _ arguments: [String: Value] = [:]) async -> CallTool.Result {
     await tools.call(CallTool.Parameters(name: name, arguments: arguments))
 }
 
@@ -86,16 +86,24 @@ func json(_ result: CallTool.Result) throws -> [String: Any] {
 @Suite struct SchemaTests {
     @Test func toolsHaveFlatClosedSchemas() {
         #expect(
-            ReadTools.all.map(\.name) == [
+            RePossessTools.all.map(\.name) == [
                 "get_overview", "list_documents", "search_documents", "fetch_document", "fetch_page_image",
-                "fetch_page_chunks", "refresh_documents", "status",
+                "fetch_page_chunks", "refresh_documents", "push_markdown", "push_file", "status",
             ]
         )
-        for tool in ReadTools.all {
+        for tool in RePossessTools.all {
             let schema = tool.inputSchema.objectValue ?? [:]
             #expect(schema["additionalProperties"] == false, "\(tool.name)")
             #expect(schema["oneOf"] == nil && schema["anyOf"] == nil && schema["allOf"] == nil)
-            #expect(tool.annotations.readOnlyHint == true)
+            let writes = tool.name.hasPrefix("push_")
+            #expect(tool.annotations.readOnlyHint == !writes, "\(tool.name)")
+            if writes {
+                #expect(tool.annotations.destructiveHint == false && tool.annotations.idempotentHint == false)
+                let description = tool.description ?? ""
+                #expect(description.contains("every call creates a new document"))
+                #expect(description.contains("Do not call it again to retry"))
+                #expect(description.contains("Limits:"))
+            }
         }
     }
 }
@@ -108,6 +116,7 @@ func json(_ result: CallTool.Result) throws -> [String: Any] {
         let documents = object["documents"] as! [[String: Any]]
         #expect(documents.map { $0["path"] as! String } == ["Garden/Seed Order", "Keeper's Log", "Raised Bed Sketch"])
         #expect(documents.map { $0["content_status"] as! String } == ["text", "text", "ink"])
+        #expect(documents.allSatisfy { $0["file_type"] as? String == "notebook" })
         let structured = try #require(result.structuredContent)
         let fromStructured = try JSONSerialization.jsonObject(with: JSONEncoder().encode(structured)) as! [String: Any]
         #expect(NSDictionary(dictionary: fromStructured).isEqual(to: object))
@@ -119,6 +128,7 @@ func json(_ result: CallTool.Result) throws -> [String: Any] {
         let results = object["results"] as! [[String: Any]]
         #expect(results.count == 1)
         #expect(results[0]["id"] as? String == "doc-typed" && results[0]["page_no"] as? Int == 1)
+        #expect(results[0]["file_type"] as? String == "notebook" && results[0]["content_status"] as? String == "text")
         let limited = try json(await call(tools, "search_documents", ["query": "lighthouse", "limit": 2]))
         #expect(limited["total"] as? Int == 12 && (limited["results"] as! [Any]).count == 2)
         #expect(await call(tools, "search_documents", ["query": ""]).isError == true)
@@ -188,7 +198,7 @@ func json(_ result: CallTool.Result) throws -> [String: Any] {
         let tools = try await stockedTools()
         let overview = texts(await call(tools, "get_overview"))[0]
         #expect(overview.contains("3 documents in 1 folders"))
-        #expect(overview.contains("id: doc-long"))
+        #expect(overview.contains("id: doc-long · notebook · path: Keeper's Log"))
         let refresh = texts(await call(tools, "refresh_documents", ["source": "cloud"]))[0]
         #expect(refresh.hasPrefix("Refreshed from the cloud"))
         #expect(await call(tools, "refresh_documents", ["source": "ftp"]).isError == true)
@@ -238,12 +248,12 @@ func json(_ result: CallTool.Result) throws -> [String: Any] {
     }
 
     @Test func agesInWords() {
-        #expect(ReadTools.ageText(seconds: 0) == "0 seconds")
-        #expect(ReadTools.ageText(seconds: 1) == "1 second")
-        #expect(ReadTools.ageText(seconds: 59) == "59 seconds")
-        #expect(ReadTools.ageText(seconds: 60) == "1 minute")
-        #expect(ReadTools.ageText(seconds: 7_300) == "2 hours")
-        #expect(ReadTools.ageText(seconds: 90_000) == "1 day")
+        #expect(RePossessTools.ageText(seconds: 0) == "0 seconds")
+        #expect(RePossessTools.ageText(seconds: 1) == "1 second")
+        #expect(RePossessTools.ageText(seconds: 59) == "59 seconds")
+        #expect(RePossessTools.ageText(seconds: 60) == "1 minute")
+        #expect(RePossessTools.ageText(seconds: 7_300) == "2 hours")
+        #expect(RePossessTools.ageText(seconds: 90_000) == "1 day")
     }
 }
 

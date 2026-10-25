@@ -40,6 +40,8 @@ public struct RefreshReport: Sendable, Equatable {
     public var seconds = 0.0
     /// The error that stopped the refresh before the end, if one did.
     public var stoppedBy: String?
+    /// The pushes that the queue sent or checked after the refresh.
+    public var pushes: [PushRecord] = []
 
     public init(source: Source) { self.source = source }
 }

@@ -17,7 +17,16 @@ let usage = """
                                   when the tablet is connected by cable, and the cloud otherwise.
       status                      Show the library, and each source's last success and last error.
       list                        List the documents: path, pages, text status, modified, and ID.
-      mcp                         Serve the read tools over MCP on standard input and output.
+      mcp                         Serve the tools over MCP on standard input and output.
+
+    Commands that add documents to the tablet (each push makes a new document; none replaces one):
+      push-markdown <file.md | -> --title <title> [--paginate] [--usb | --cloud] [--out <file.rmdoc>]
+                                  Send Markdown as a notebook. --paginate starts a page at each ## heading.
+                                  --out writes the notebook to a file and sends nothing.
+      push-file <path | https-url> [--title <title>] [--usb | --cloud]
+                                  Send a PDF or EPUB.
+      pushes                      List the queue of pushes and what happened to each.
+      drop-push <id>              Remove a push that has not been sent.
 
     Commands for the cloud:
       pair                        Pair with your reMarkable account. Reads a one-time code from
@@ -50,7 +59,7 @@ struct Arguments {
     var options: [String: String] = [:]
     var flags: Set<String> = []
 
-    static let valued: Set<String> = ["--library", "--out", "--scale", "--rmdoc"]
+    static let valued: Set<String> = ["--library", "--out", "--scale", "--rmdoc", "--title"]
 
     init(_ arguments: [String]) throws {
         guard let first = arguments.first else { throw UsageError(usage) }
@@ -80,6 +89,33 @@ func printError(_ message: String) {
     FileHandle.standardError.write(Data((message + "\n").utf8))
 }
 
+func describe(_ result: PushResult) -> String {
+    var lines = [
+        "Push: \(result.push_id)", "Title: \(result.title)", "Kind: \(result.kind)", "Status: \(result.status)",
+    ]
+    if let via = result.via { lines.append("Via: \(via == "usb" ? "USB" : "cloud")") }
+    if let id = result.tablet_id { lines.append("Document ID: \(id)") }
+    if let pages = result.pages { lines.append("Pages: \(pages)") }
+    lines += ["Bytes: \(result.bytes)", result.message]
+    return lines.joined(separator: "\n")
+}
+
+/// The paths for a push command: both by availability, or the one that a flag names.
+func pushPaths(_ arguments: Arguments, session: CloudSession) throws -> @Sendable () -> PushPaths {
+    let usb = arguments.flags.contains("--usb")
+    let cloud = arguments.flags.contains("--cloud")
+    guard !(usb && cloud) else { throw UsageError("give --usb or --cloud, not both") }
+    if usb {
+        guard USBNetwork.isPresent() else { throw UsageError("the tablet is not connected by USB") }
+        return { PushPaths(usb: { USBClient() }, cloud: nil) }
+    }
+    if cloud {
+        guard DeviceTokenKeychain.exists() else { throw UsageError("rePossess is not paired; run `repossess pair`") }
+        return { PushPaths(usb: nil, cloud: session) }
+    }
+    return Pusher.availablePaths(session: session)
+}
+
 func describe(_ report: RefreshReport) -> String {
     var lines = [
         "Source: \(report.source == .usb ? "USB" : "cloud")",
@@ -107,7 +143,17 @@ func describe(_ report: RefreshReport) -> String {
         lines.append("Failed: \(report.failed.count)")
         lines += report.failed.map { "  \($0)" }
     }
+    if report.exportsDownloaded > 0 || report.exportsFailed > 0 {
+        lines.append(
+            "Tablet PDF exports: \(report.exportsDownloaded) downloaded, \(report.exportsFailed) not available"
+        )
+    }
     if let stopped = report.stoppedBy { lines.append("Stopped: \(stopped)") }
+    for push in report.pushes {
+        lines.append(
+            "Push \(push.id) \"\(push.title)\": \(push.status.rawValue)\(push.via.map { " via \($0.rawValue)" } ?? "")"
+        )
+    }
     return lines.joined(separator: "\n")
 }
 
@@ -154,10 +200,12 @@ struct Repossess {
             let cloud = arguments.flags.contains("--cloud")
             guard !(usb && cloud) else { throw UsageError("give --usb or --cloud, not both") }
             let library = try Library(root: libraryRoot(arguments))
+            let session = CloudSession()
             let reports = try await refreshLibrary(
                 library,
                 usb ? .usb : (cloud ? .cloud : .auto),
-                session: CloudSession(),
+                session: session,
+                pushes: Pusher.availablePaths(session: session)(),
                 progress: { printError($0) }
             )
             print(reports.map(describe).joined(separator: "\n\n"))
@@ -182,14 +230,22 @@ struct Repossess {
             print("USB network present: \(USBNetwork.isPresent() ? "yes" : "no")")
             let service = DeviceTokenKeychain.pairedService()
             print("Cloud device token in the Keychain: \(service.map { "yes, under \"\($0)\"" } ?? "no")")
+            let counts = try library.pushCounts()
+            let queue = [PushStatus.pending, .unknown, .failed, .sent].compactMap { status in
+                counts[status].map { "\($0) \(status.rawValue)" }
+            }
+            print("Pushes: \(queue.isEmpty ? "none" : queue.joined(separator: ", "))")
 
         case "list":
             let library = try Library(root: libraryRoot(arguments))
             for document in try library.documents() {
                 let modified = document.modified.map { $0.formatted(.iso8601) } ?? ""
                 print(
-                    [document.path, "\(document.pageCount)", document.contentStatus.rawValue, modified, document.id]
-                        .joined(separator: "\t")
+                    [
+                        document.path, document.fileType ?? "notebook", "\(document.pageCount)",
+                        document.contentStatus.rawValue, modified, document.id,
+                    ]
+                    .joined(separator: "\t")
                 )
             }
 
@@ -197,13 +253,87 @@ struct Repossess {
             let library = try Library(root: libraryRoot(arguments))
             // No one watches the server, so it waits at most 20 seconds for a Keychain dialog.
             let session = CloudSession(tokenTimeout: .seconds(20))
-            let tools = ReadTools(
+            let paths = Pusher.availablePaths(session: session)
+            let tools = RePossessTools(
                 library: library,
                 refresh: { source in
-                    try await refreshLibrary(library, source, session: session, progress: { printError($0) })
-                }
+                    try await refreshLibrary(
+                        library,
+                        source,
+                        session: session,
+                        pushes: paths(),
+                        progress: { printError($0) }
+                    )
+                },
+                pusher: Pusher(library: library, paths: paths, progress: { printError($0) })
             )
             try await serveMCP(tools: tools, version: version)
+
+        case "push-markdown":
+            guard arguments.positional.count == 1, let title = arguments.options["--title"] else {
+                throw UsageError("push-markdown needs a Markdown file, or - for standard input, and --title")
+            }
+            let source = arguments.positional[0]
+            let markdown =
+                source == "-"
+                ? String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
+                : try String(contentsOf: URL(filePath: (source as NSString).expandingTildeInPath), encoding: .utf8)
+            let paginate = arguments.flags.contains("--paginate")
+            if let out = arguments.options["--out"] {
+                let notebook = try MarkdownNotebook(title: title, markdown: markdown, paginate: paginate)
+                try notebook.rmdoc.write(to: URL(filePath: out))
+                print(
+                    "Wrote \(out): \(notebook.pageCount) pages, \(notebook.paragraphCount) paragraphs. Nothing was sent."
+                )
+                return
+            }
+            let library = try Library(root: libraryRoot(arguments))
+            let session = CloudSession()
+            let pusher = Pusher(
+                library: library,
+                paths: try pushPaths(arguments, session: session),
+                progress: { printError($0) }
+            )
+            print(describe(try await pusher.pushMarkdown(title: title, markdown: markdown, paginate: paginate)))
+
+        case "push-file":
+            guard arguments.positional.count == 1 else { throw UsageError("push-file needs a path or an https URL") }
+            let target = arguments.positional[0]
+            let isURL = target.lowercased().hasPrefix("https://") || target.lowercased().hasPrefix("http://")
+            let library = try Library(root: libraryRoot(arguments))
+            let session = CloudSession()
+            let pusher = Pusher(
+                library: library,
+                paths: try pushPaths(arguments, session: session),
+                progress: { printError($0) }
+            )
+            let result = try await pusher.pushFile(
+                path: isURL ? nil : target,
+                url: isURL ? target : nil,
+                title: arguments.options["--title"]
+            )
+            print(describe(result))
+
+        case "pushes":
+            let library = try Library(root: libraryRoot(arguments))
+            for push in try library.pushes() {
+                print(
+                    [
+                        push.id, push.status.rawValue, push.via?.rawValue ?? "-", push.kind.rawValue,
+                        push.created.formatted(.iso8601), push.tabletID ?? "-", push.title, push.error ?? "",
+                    ]
+                    .joined(separator: "\t")
+                )
+            }
+
+        case "drop-push":
+            guard arguments.positional.count == 1 else { throw UsageError("drop-push needs a push ID") }
+            let library = try Library(root: libraryRoot(arguments))
+            let dropped = try library.dropPush(id: arguments.positional[0])
+            print("Dropped \(dropped.id) \"\(dropped.title)\" (\(dropped.status.rawValue)).")
+            if dropped.status == .unknown {
+                print("Its last send got no answer, so it may be on the tablet. Look for \"\(dropped.title)\" there.")
+            }
 
         case "pair":
             printError("Paste the one-time code from \(CloudHosts.connectPage.absoluteString) and press Return:")
@@ -240,7 +370,11 @@ struct Repossess {
                     maxHeight: scene.height * scale
                 )
             } else {
-                image = try PageRenderer.render(scene, maxWidth: ReadTools.imageWidth, maxHeight: ReadTools.imageHeight)
+                image = try PageRenderer.render(
+                    scene,
+                    maxWidth: RePossessTools.imageWidth,
+                    maxHeight: RePossessTools.imageHeight
+                )
             }
             try image.png.write(to: URL(filePath: out))
             print("\(image.width) x \(image.height) pixels, \(image.png.count) bytes")
