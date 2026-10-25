@@ -15,9 +15,16 @@ let usage = """
     Commands:
       refresh [--usb | --cloud]   Refresh the mirror from the tablet. Without a flag, use USB
                                   when the tablet is connected by cable, and the cloud otherwise.
-      status                      Show the library and the last refresh from each source.
+      status                      Show the library, and each source's last success and last error.
       list                        List the documents: path, pages, text status, modified, and ID.
       mcp                         Serve the read tools over MCP on standard input and output.
+
+    Commands for the cloud:
+      pair                        Pair with your reMarkable account. Reads a one-time code from
+                                  standard input; get one from \(CloudHosts.connectPage.absoluteString).
+      unpair                      Delete the device token from the login keychain.
+      check-token                 Read the device token from the login keychain, without sending it
+                                  anywhere, so that macOS can ask once for permission.
 
     Commands for checking the renderer:
       render <id> <page> --out <file.png> [--scale <pixels per page pixel>]
@@ -80,10 +87,22 @@ func describe(_ report: RefreshReport) -> String {
         "Downloaded: \(report.downloaded)",
         "Unchanged: \(report.unchanged)",
         "Removed: \(report.removed)",
-        "Requests: \(report.requests)",
-        "Bytes: \(report.bytes)",
-        String(format: "Seconds: %.2f", report.seconds),
     ]
+    if report.source == .cloud {
+        lines += [
+            "Kept because the mirror's copy is newer: \(report.keptNewer)",
+            "Files downloaded: \(report.filesDownloaded)",
+            "Files reused from the mirror: \(report.filesReused) (\(report.bytesReused) bytes)",
+        ]
+    }
+    lines += [
+        "Requests: \(report.requests)",
+        "Bytes received: \(report.bytes)",
+    ]
+    if report.retries > 0 || report.waits > 0 {
+        lines.append("Retries: \(report.retries); rate-limit waits: \(report.waits)")
+    }
+    lines.append(String(format: "Seconds: %.2f", report.seconds))
     if !report.failed.isEmpty {
         lines.append("Failed: \(report.failed.count)")
         lines += report.failed.map { "  \($0)" }
@@ -152,11 +171,17 @@ struct Repossess {
             for source in [Source.usb, .cloud] {
                 let name = source == .usb ? "USB" : "Cloud"
                 let when = status.lastRefresh[source].map { $0.formatted(.iso8601) } ?? "never"
-                print("\(name) refresh: \(when)")
-                if let error = status.lastError[source] { print("\(name) error: \(error)") }
+                print("\(name) last success: \(when)")
+                if let error = status.lastError[source] {
+                    let at = status.lastErrorAt[source].map { $0.formatted(.iso8601) } ?? "time unknown"
+                    print("\(name) last error (\(at)): \(error)")
+                } else {
+                    print("\(name) last error: none since the last success")
+                }
             }
             print("USB network present: \(USBNetwork.isPresent() ? "yes" : "no")")
-            print("Cloud device token in the Keychain: \(DeviceTokenKeychain.exists() ? "yes" : "no")")
+            let service = DeviceTokenKeychain.pairedService()
+            print("Cloud device token in the Keychain: \(service.map { "yes, under \"\($0)\"" } ?? "no")")
 
         case "list":
             let library = try Library(root: libraryRoot(arguments))
@@ -179,6 +204,30 @@ struct Repossess {
                 }
             )
             try await serveMCP(tools: tools, version: version)
+
+        case "pair":
+            printError("Paste the one-time code from \(CloudHosts.connectPage.absoluteString) and press Return:")
+            guard let code = readLine(strippingNewline: true) else { throw UsageError("no code on standard input") }
+            let result = try await Pairing().pair(code: code)
+            print(
+                "Paired as a desktop-macos device. The device token is in the login keychain under \"\(result.service)\"."
+            )
+            if let older = result.olderService {
+                print(
+                    "The older item \"\(older)\" is still in the login keychain, and rePossess no longer reads it."
+                        + " Its device stays on your account until you remove it on my.remarkable.com."
+                )
+            }
+
+        case "unpair":
+            print(Pairing.unpairMessage(deleted: try Pairing().unpair()))
+
+        case "check-token":
+            // Reads the secret, so macOS may ask for permission; the token is never printed or sent.
+            let (token, service) = try DeviceTokenKeychain.read(from: SystemKeychain())
+            let claims = try? TokenClaims(jwt: token)
+            print("Read the device token from the login keychain item \"\(service)\".")
+            if let description = claims?.deviceDescription { print("Device type: \(description)") }
 
         case "render":
             guard let out = arguments.options["--out"] else { throw UsageError("render needs --out") }

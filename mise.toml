@@ -17,3 +17,19 @@ run = "swift format --in-place --recursive Package.swift Sources Tests"
 [tasks.check]
 description = "Lint, build, and test"
 depends = ["lint", "build", "test"]
+
+[tasks."build:release"]
+description = "Build the release binary and sign it with a stable identity and identifier"
+# An ad hoc signature changes with every build, so the Keychain treats each build as a new program
+# and asks again for the device token. A certificate signature with a fixed identifier
+# gives every build the same designated requirement.
+run = """
+set -eu
+identity="${REPOSSESS_SIGNING_IDENTITY:-Apple Development: Mattt Zmuda (S3NBB5643Q)}"
+swift build -c release --product repossess
+binary="$(swift build -c release --show-bin-path)/repossess"
+codesign --force --sign "$identity" --identifier co.dododo.repossess --timestamp=none "$binary"
+codesign --verify --strict "$binary"
+codesign --display --requirements - "$binary"
+echo "Signed $binary"
+"""
