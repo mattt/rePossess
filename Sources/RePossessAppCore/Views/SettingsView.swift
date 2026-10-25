@@ -166,7 +166,8 @@ struct RecognizerSettings: View {
     @State private var provider: RecognizerProvider?
     @State private var modelName = ""
     @State private var baseURL = ""
-    @State private var consent = false
+    /// The owner's consent to send page images, for one provider and address only.
+    @State private var consent = PageImageConsent()
     @State private var apiKey = ""
     @State private var message: String?
 
@@ -270,19 +271,37 @@ struct RecognizerSettings: View {
         }
         .formStyle(.grouped)
         .onAppear(perform: load)
+        // A new provider or address needs a new consent, even when the owner changes it back.
+        .onChange(of: draftDestination) { _, destination in consent.draftChanged(to: destination) }
+    }
+
+    /// The destination of the draft's page images, or `nil` when they stay on this Mac or there is no draft.
+    var draftDestination: PageImageDestination? {
+        guard case .success(let configuration) = draft else { return nil }
+        return PageImageDestination(configuration)
     }
 
     /// The plain statement of where page images go for the chosen provider, and the consent it needs.
     @ViewBuilder var destination: some View {
         switch draft {
-        case .success(let configuration) where configuration.sendsPageImages:
-            Text(
-                "With this provider, an image of each page with handwriting leaves this Mac and goes to \(configuration.destination)."
-            )
-            .foregroundStyle(.orange)
-            Toggle("Send page images to \(configuration.receivingHost ?? "the provider")", isOn: $consent)
         case .success(let configuration):
-            Text(Self.whereImagesGo(configuration)).foregroundStyle(.secondary)
+            if let receiver = PageImageDestination(configuration) {
+                Label {
+                    Text(
+                        "With this provider, an image of each page with handwriting leaves this Mac and goes to \(configuration.destination)."
+                    )
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                }
+                LabeledContent("Page images go to") {
+                    Text(receiver.label).textSelection(.enabled)
+                }
+                // The checkbox names the destination, and its state belongs to that destination only.
+                Toggle("Send page images to \(receiver.address)", isOn: consentBinding(for: configuration))
+                    .toggleStyle(.checkbox)
+            } else {
+                Text(Self.whereImagesGo(configuration)).foregroundStyle(.secondary)
+            }
         case .failure(let error):
             Text(error.description).foregroundStyle(.secondary)
         case nil:
@@ -291,15 +310,26 @@ struct RecognizerSettings: View {
         }
     }
 
+    /// The checkbox's state: on only when the consent names this configuration's destination.
+    func consentBinding(for configuration: RecognizerConfiguration) -> Binding<Bool> {
+        Binding(
+            get: { consent.allows(configuration) },
+            set: { agreed in
+                if agreed { consent.grant(configuration) } else { consent.revoke() }
+            }
+        )
+    }
+
     var canApply: Bool {
         guard case .success(let configuration) = draft else { return false }
-        return !configuration.sendsPageImages || consent
+        return consent.allows(configuration)
     }
 
     func apply() {
         guard case .success(let configuration) = draft else { return }
         do {
-            try model.setRecognizer(configuration)
+            // The model checks the consent against the destination again before it saves.
+            try model.setRecognizer(configuration, consent: consent)
             message = "rePossess now reads handwriting with \(configuration.label)."
             model.recognizeInBackground()
         } catch {
@@ -312,16 +342,23 @@ struct RecognizerSettings: View {
         provider = configuration.provider
         modelName = configuration.model ?? ""
         baseURL = configuration.baseURL?.absoluteString ?? ""
-        consent = configuration.sendsPageImages
+        consent = PageImageConsent(saved: configuration)
     }
 
-    /// Where page images go, in one sentence.
+    /// Where the recognizer sends page images, in one sentence.
+    /// It describes recognition only; a connected AI client can also ask for page images.
     static func whereImagesGo(_ configuration: RecognizerConfiguration) -> String {
-        if configuration.sendsPageImages {
-            return "Page images leave this Mac and go to \(configuration.destination)."
+        if configuration.provider == .client {
+            return
+                "For recognition, page images go to the MCP client that asks for it. That client decides which model receives them."
         }
-        if configuration.provider == .ollama { return "Page images go to \(configuration.destination)." }
-        return "Page images stay on this Mac."
+        if configuration.sendsPageImages {
+            return "For recognition, page images leave this Mac and go to \(configuration.destination)."
+        }
+        if configuration.provider == .ollama {
+            return "For recognition, page images go to \(configuration.destination)."
+        }
+        return "Recognition keeps page images on this Mac."
     }
 
     static func name(_ provider: RecognizerProvider) -> String {

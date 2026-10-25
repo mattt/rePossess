@@ -376,7 +376,14 @@ public final class AppModel {
     public var recognizer: RecognizerConfiguration? { snapshot.recognizer }
 
     /// Saves a recognizer, as `repossess recognizer set` does.
-    public func setRecognizer(_ configuration: RecognizerConfiguration) throws {
+    ///
+    /// A recognizer that sends page images off the Mac needs the owner's consent to its destination,
+    /// as `--send-page-images` is for the command; a consent to another provider or address does not count.
+    /// - Throws: ``ConsentError`` when the consent does not cover the configuration's destination.
+    public func setRecognizer(_ configuration: RecognizerConfiguration, consent: PageImageConsent) throws {
+        if let destination = PageImageDestination(configuration), !consent.allows(configuration) {
+            throw ConsentError(destination: destination)
+        }
         guard let library else { throw CocoaError(.fileWriteUnknown) }
         try configuration.save(to: library.root)
         try library.setActiveRecognitionKey(configuration.key)

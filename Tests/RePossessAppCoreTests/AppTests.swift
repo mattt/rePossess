@@ -312,3 +312,106 @@ import Testing
         #expect(output.contains("invented progress") && output.contains("recognize --library /tmp/invented"))
     }
 }
+
+@Suite struct ConsentTests {
+    func configuration(
+        _ provider: RecognizerProvider,
+        model: String? = "invented-model",
+        address: String? = nil
+    ) throws -> RecognizerConfiguration {
+        try RecognizerConfiguration(
+            provider: provider,
+            model: provider.needsModel ? model : nil,
+            baseURL: address.flatMap(URL.init(string:))
+        )
+    }
+
+    @Test func aConsentCoversOneProviderAndHostOnly() throws {
+        let anthropic = try configuration(.anthropic)
+        var consent = PageImageConsent()
+        #expect(!consent.allows(anthropic))
+        consent.grant(anthropic)
+        #expect(consent.allows(anthropic))
+        #expect(consent.destination?.address == "api.anthropic.com")
+        #expect(consent.destination?.label == "api.anthropic.com (Anthropic)")
+        // Another model at the same destination keeps the consent.
+        #expect(consent.allows(try configuration(.anthropic, model: "another-invented-model")))
+        // Another remote provider does not.
+        #expect(!consent.allows(try configuration(.openai)))
+        #expect(!consent.allows(try configuration(.gemini)))
+        #expect(!consent.allows(try configuration(.client)))
+    }
+
+    @Test func anotherAddressNeedsANewConsent() throws {
+        let openai = try configuration(.openai)
+        var consent = PageImageConsent()
+        consent.grant(openai)
+        #expect(consent.allows(openai))
+        #expect(!consent.allows(try configuration(.openai, address: "https://llm.invented.example/v1/")))
+        #expect(!consent.allows(try configuration(.openai, address: "https://api.openai.com:8443/v1/")))
+        let remoteOllama = try configuration(.ollama, address: "https://ollama.invented.example")
+        #expect(!consent.allows(remoteOllama))
+        consent.grant(remoteOllama)
+        #expect(consent.allows(remoteOllama) && !consent.allows(openai))
+    }
+
+    @Test func recognitionOnThisMacNeedsNoConsent() throws {
+        let consent = PageImageConsent()
+        #expect(consent.allows(try configuration(.mlx)))
+        #expect(consent.allows(try configuration(.foundationModels)))
+        #expect(consent.allows(try configuration(.ollama)))
+        #expect(consent.allows(try configuration(.ollama, address: "http://localhost:11434")))
+        #expect(PageImageConsent(saved: try configuration(.mlx)).destination == nil)
+    }
+
+    @Test func changingTheDraftAndBackStillNeedsANewConsent() throws {
+        let anthropic = try configuration(.anthropic)
+        let gemini = try configuration(.gemini)
+        var consent = PageImageConsent(saved: anthropic)
+        #expect(consent.allows(anthropic))
+        consent.draftChanged(to: PageImageDestination(anthropic))
+        #expect(consent.allows(anthropic))
+        consent.draftChanged(to: PageImageDestination(gemini))
+        #expect(!consent.allows(gemini))
+        consent.draftChanged(to: PageImageDestination(anthropic))
+        #expect(!consent.allows(anthropic))
+        consent.grant(anthropic)
+        consent.draftChanged(to: nil)
+        #expect(consent.destination == nil)
+    }
+
+    @MainActor @Test func theModelChecksTheConsentAgainBeforeItSaves() throws {
+        let library = try temporaryLibrary("consent")
+        let model = AppModel(
+            options: AppOptions(libraryRoot: library.root, isDefaultLibrary: false, usesKeychain: false),
+            defaults: UserDefaults(suiteName: "repossess-test-\(UUID().uuidString)")!
+        )
+        let anthropic = try configuration(.anthropic)
+        let openai = try configuration(.openai)
+        let custom = try configuration(.openai, address: "https://llm.invented.example/v1/")
+
+        var consent = PageImageConsent()
+        #expect(throws: ConsentError.self) { try model.setRecognizer(anthropic, consent: consent) }
+        #expect(model.recognizer == nil)
+
+        consent.grant(anthropic)
+        try model.setRecognizer(anthropic, consent: consent)
+        #expect(model.recognizer?.provider == .anthropic)
+
+        // The consent for Anthropic does not cover OpenAI, nor OpenAI's consent another address.
+        #expect(throws: ConsentError.self) { try model.setRecognizer(openai, consent: consent) }
+        #expect(model.recognizer?.provider == .anthropic)
+        consent.grant(openai)
+        #expect(throws: ConsentError.self) { try model.setRecognizer(custom, consent: consent) }
+        #expect(model.recognizer?.provider == .anthropic)
+        consent.grant(custom)
+        try model.setRecognizer(custom, consent: consent)
+        #expect(model.recognizer?.baseURL?.host() == "llm.invented.example")
+
+        // A recognizer on this Mac needs no consent.
+        try model.setRecognizer(try configuration(.mlx), consent: PageImageConsent())
+        #expect(model.recognizer?.provider == .mlx)
+        let error = ConsentError(destination: try #require(PageImageDestination(anthropic)))
+        #expect(error.description.contains("api.anthropic.com"))
+    }
+}

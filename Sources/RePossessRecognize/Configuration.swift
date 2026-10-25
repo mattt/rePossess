@@ -47,7 +47,7 @@ public enum RecognizerProvider: String, Sendable, Codable, CaseIterable {
     }
 
     /// A name for the company or program behind the provider.
-    var owner: String {
+    public var owner: String {
         switch self {
         case .mlx: "MLX"
         case .foundationModels: "Apple's Foundation Models"
