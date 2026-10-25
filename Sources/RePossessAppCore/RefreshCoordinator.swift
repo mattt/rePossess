@@ -12,6 +12,8 @@ public enum RefreshTrigger: String, Sendable, Equatable {
     case usbAppeared
     /// The schedule's interval passed.
     case schedule
+    /// `repossess mcp` asked the app to refresh over USB for its client (see `AppLink`).
+    case client
 }
 
 /// What the app knows about the paths when a refresh starts.
@@ -29,7 +31,8 @@ public struct RefreshPaths: Sendable, Equatable {
     /// The app never refreshes from the cloud without a device token,
     /// so an unpaired Mac records no cloud errors, and a USB refresh does not fall back to the cloud.
     public func source(for trigger: RefreshTrigger) -> RefreshSource? {
-        switch (usbPresent, paired) {
+        if trigger == .client { return usbPresent ? .usb : nil }
+        return switch (usbPresent, paired) {
         case (true, true): trigger == .usbAppeared ? .usb : .auto
         case (true, false): .usb
         case (false, true): trigger == .usbAppeared ? nil : .cloud

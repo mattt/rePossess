@@ -295,6 +295,9 @@ struct Repossess {
             let session = CloudSession(tokenTimeout: .seconds(20))
             let paths = Pusher.availablePaths(session: session)
             let sampling = ClientSampling()
+            // While rePossess.app runs, it does the USB work, because macOS may not let this process,
+            // which an MCP client started, use the local network (see AppLink).
+            let app = AppLink(libraryRoot: library.root)
             let tools = RePossessTools(
                 library: library,
                 refresh: { source in
@@ -302,11 +305,17 @@ struct Repossess {
                         library,
                         source,
                         session: session,
+                        usbByApp: { try await app.refreshUSB(library: library, progress: { printError($0) }) },
                         pushes: paths(),
                         progress: { printError($0) }
                     )
                 },
-                pusher: Pusher(library: library, paths: paths, progress: { printError($0) }),
+                pusher: Pusher(
+                    library: library,
+                    paths: paths,
+                    byApp: { try await app.sendPushes() },
+                    progress: { printError($0) }
+                ),
                 recognition: .live(library: library, sampler: sampling)
             )
             try await serveMCP(tools: tools, version: version, sampling: sampling)

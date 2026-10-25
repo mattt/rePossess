@@ -30,7 +30,7 @@ public enum PushStatus: String, Sendable, Codable {
 }
 
 /// One push in the library's queue.
-public struct PushRecord: Sendable, Equatable {
+public struct PushRecord: Sendable, Equatable, Codable {
     /// The push's ID, a lowercase UUID. A cloud push uses it as the document ID.
     public var id: String
     public var kind: PushKind

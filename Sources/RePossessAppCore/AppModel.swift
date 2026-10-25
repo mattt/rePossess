@@ -57,6 +57,8 @@ public final class AppModel {
     /// Whether the model download is running.
     public var downloading: Bool { download != nil }
     private var monitor: NWPathMonitor?
+    /// Answers `repossess mcp` when its client asks for USB work (see `AppLink`).
+    private var link: AppLinkServer?
 
     public init(options: AppOptions = AppOptions(), defaults: UserDefaults = .standard) {
         self.options = options
@@ -154,6 +156,7 @@ public final class AppModel {
         }
         monitor.start(queue: DispatchQueue(label: "co.dododo.repossess.network"))
         self.monitor = monitor
+        startLink()
         // The status lines hold counts, times, and error messages, not document names.
         Log.refresh.notice("Started with the status: \(self.snapshot.lines.joined(separator: " | "), privacy: .public)")
         // Pages that a refresh by `repossess` brought while the app was closed wait too.
@@ -172,6 +175,67 @@ public final class AppModel {
         loop = nil
         monitor?.cancel()
         monitor = nil
+        link?.stop()
+        link = nil
+    }
+
+    // MARK: The helper's requests
+
+    /// Listens on the library's socket, so that `repossess mcp` can ask the app for USB work.
+    private func startLink() {
+        guard library != nil, link == nil else { return }
+        let server = AppLinkServer(link: AppLink(libraryRoot: options.libraryRoot)) { [weak self] request in
+            await self?.answer(request) ?? AppLinkResponse(status: .failed, message: "rePossess.app is quitting")
+        }
+        do {
+            try server.start()
+            link = server
+            Log.refresh.notice("Listening for repossess mcp at \(server.link.path, privacy: .public)")
+        } catch {
+            Log.refresh.error("Not listening for repossess mcp: \(error, privacy: .public)")
+        }
+    }
+
+    /// Does what the helper asks: a USB refresh, or a send of the queue, after the app's own refresh ends.
+    func answer(_ request: AppLinkRequest) async -> AppLinkResponse {
+        guard let library else { return AppLinkResponse(status: .failed, message: libraryError) }
+        let deadline = Date().addingTimeInterval(300)
+        while refreshing, Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }
+        guard !refreshing else {
+            return AppLinkResponse(status: .busy, message: "rePossess.app's own refresh is still running")
+        }
+        guard USBNetwork.isPresent() else {
+            return AppLinkResponse(status: .noUSB, message: "rePossess.app does not see the tablet on USB")
+        }
+        Log.refresh.notice("A client asked through repossess mcp: \(request.rawValue, privacy: .public)")
+        switch request {
+        case .refreshUSB:
+            refreshing = true
+            let outcome = await coordinator.run(.client)
+            finish(outcome)
+            switch outcome.result {
+            case .finished(let reports): return AppLinkResponse(status: .done, reports: reports)
+            case .busyElsewhere, .alreadyRunning: return AppLinkResponse(status: .busy)
+            case .failed(let message): return AppLinkResponse(status: .failed, message: message)
+            case .noPath: return AppLinkResponse(status: .noUSB)
+            }
+        case .sendPushes:
+            refreshing = true
+            defer {
+                refreshing = false
+                updateSnapshot()
+            }
+            let paired = options.usesKeychain && DeviceTokenKeychain.pairedService(in: store) != nil
+            let paths = PushPaths(usb: { USBClient() }, cloud: paired ? session : nil)
+            do {
+                let pushes = try await library.sendPushes(paths: paths, progress: { Log.refresh.info("\($0)") })
+                return AppLinkResponse(status: .done, pushes: pushes)
+            } catch RefreshError.busy {
+                return AppLinkResponse(status: .busy)
+            } catch {
+                return AppLinkResponse(status: .failed, message: "\(error)")
+            }
+        }
     }
 
     /// Checks for the tablet's USB network and the schedule, and starts a refresh when one is due.
@@ -204,7 +268,8 @@ public final class AppModel {
 
     private func finish(_ outcome: RefreshOutcome) {
         refreshing = false
-        if outcome.result != .alreadyRunning {
+        // A client's USB refresh does not move the schedule or its backoff.
+        if outcome.result != .alreadyRunning, outcome.trigger != .client {
             lastOutcome = outcome
             lastAttempt = outcome.ended
             failures = outcome.isFailure ? failures + 1 : 0

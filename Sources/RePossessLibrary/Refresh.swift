@@ -4,7 +4,7 @@ import RePossessFormat
 import RePossessUSB
 
 /// What one refresh did.
-public struct RefreshReport: Sendable, Equatable {
+public struct RefreshReport: Sendable, Equatable, Codable {
     public var source: Source
     /// The documents that the source listed, outside the trash.
     public var listed = 0
@@ -42,6 +42,8 @@ public struct RefreshReport: Sendable, Equatable {
     public var stoppedBy: String?
     /// The pushes that the queue sent or checked after the refresh.
     public var pushes: [PushRecord] = []
+    /// Whether rePossess.app did this refresh for another process, such as `repossess mcp`.
+    public var byApp = false
 
     public init(source: Source) { self.source = source }
 }

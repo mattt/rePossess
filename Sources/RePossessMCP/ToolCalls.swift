@@ -419,7 +419,7 @@ extension RePossessTools {
         }
         var out = ""
         for report in reports {
-            let name = report.source == .usb ? "USB" : "the cloud"
+            let name = report.source == .usb ? (report.byApp ? "USB by rePossess.app" : "USB") : "the cloud"
             out += "Refreshed from \(name) in \(String(format: "%.1f", report.seconds)) seconds: "
             out += "\(report.listed) documents, \(report.downloaded) downloaded, \(report.unchanged) unchanged, "
             out += "\(report.removed) removed, \(report.requests) requests.\n"

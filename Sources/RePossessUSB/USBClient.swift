@@ -114,6 +114,10 @@ public enum USBError: Error, Equatable, CustomStringConvertible {
     case malformedListing(String)
     /// A document or folder ID had characters other than letters, digits, and hyphens.
     case invalidID(String)
+    /// macOS reported the tablet's network as offline while the Mac is on it,
+    /// which is how a request fails when macOS does not let the program, or the app that started it,
+    /// use the local network (TN3179).
+    case localNetworkDenied
     /// Another network failure.
     case network(String)
 
@@ -134,6 +138,12 @@ public enum USBError: Error, Equatable, CustomStringConvertible {
         case .connectionLost(let message): "the connection to the tablet closed before its answer: \(message)"
         case .malformedListing(let reason): "the tablet's listing could not be read: \(reason)"
         case .invalidID(let id): "not a tablet document ID: \(id)"
+        case .localNetworkDenied:
+            "macOS reported the tablet's USB network (10.11.99.1) as offline, although the Mac is on it. "
+                + "This usually means that the app that started rePossess, such as an MCP client, "
+                + "may not use the local network, or that macOS is still asking. "
+                + "Open rePossess.app, which refreshes over USB for clients while it runs, "
+                + "or allow the app in System Settings > Privacy & Security > Local Network, then try again."
         case .network(let message): "USB request failed: \(message)"
         }
     }
@@ -151,8 +161,10 @@ public protocol USBTransport: Sendable {
 /// The live transport, with `URLSession`.
 public struct URLSessionUSBTransport: USBTransport {
     private let session: URLSession
+    private let usbPresent: @Sendable () -> Bool
 
-    public init() {
+    public init(usbPresent: @escaping @Sendable () -> Bool = USBNetwork.isPresent) {
+        self.usbPresent = usbPresent
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpMaximumConnectionsPerHost = 1
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -182,18 +194,28 @@ public struct URLSessionUSBTransport: USBTransport {
             guard let http = response as? HTTPURLResponse else { throw USBError.network("not an HTTP response") }
             return (http.statusCode, data)
         } catch let error as URLError {
-            switch error.code {
-            case .timedOut:
-                throw USBError.timedOut(route: url.path(), seconds: Int(timeout))
-            case .cannotConnectToHost:
-                throw USBError.interfaceOff
-            case .networkConnectionLost:
-                throw USBError.connectionLost(error.localizedDescription)
-            case .cannotFindHost, .notConnectedToInternet:
-                throw USBError.network(error.localizedDescription)
-            default:
-                throw USBError.network(error.localizedDescription)
-            }
+            throw Self.usbError(error, url: url, timeout: timeout, usbPresent: usbPresent())
+        }
+    }
+
+    /// The ``USBError`` for a URL error.
+    ///
+    /// A request to the tablet that fails as offline while the Mac is on the tablet's network
+    /// is a local network refusal: on 2026-10-25, the helper that Claude Desktop started
+    /// failed with "The Internet connection appears to be offline" (NSURLErrorNotConnectedToInternet),
+    /// and the system log showed its connection "unsatisfied (Local network prohibited)".
+    static func usbError(_ error: URLError, url: URL, timeout: TimeInterval, usbPresent: Bool) -> USBError {
+        switch error.code {
+        case .timedOut:
+            return .timedOut(route: url.path(), seconds: Int(timeout))
+        case .cannotConnectToHost:
+            return .interfaceOff
+        case .networkConnectionLost:
+            return .connectionLost(error.localizedDescription)
+        case .notConnectedToInternet where usbPresent && url.host()?.hasPrefix("10.11.99.") == true:
+            return .localNetworkDenied
+        default:
+            return .network(error.localizedDescription)
         }
     }
 }
@@ -215,6 +237,7 @@ public actor USBClient {
     let pdfTimeout: TimeInterval
     let uploadTimeout: TimeInterval
     let checkInterface: @Sendable () -> Bool
+    let wait: @Sendable (Duration) async -> Void
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private var stopped = false
@@ -227,6 +250,7 @@ public actor USBClient {
     ///   - pdfTimeout: Seconds for a PDF that the tablet renders; 10 pages took 5.3 s.
     ///   - uploadTimeout: Seconds for an upload; uploads of up to 29 KB took 0.03 to 0.25 s in spikes 1 and 4.
     ///   - checkInterface: Whether the Mac is on the tablet's USB network.
+    ///   - wait: Waits before a request is sent again after ``USBError/localNetworkDenied``.
     public init(
         host: URL = USBClient.defaultHost,
         transport: any USBTransport = URLSessionUSBTransport(),
@@ -234,8 +258,10 @@ public actor USBClient {
         downloadTimeout: TimeInterval = 60,
         pdfTimeout: TimeInterval = 120,
         uploadTimeout: TimeInterval = 120,
-        checkInterface: @escaping @Sendable () -> Bool = USBNetwork.isPresent
+        checkInterface: @escaping @Sendable () -> Bool = USBNetwork.isPresent,
+        wait: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     ) {
+        self.wait = wait
         self.host = host
         self.transport = transport
         self.listTimeout = listTimeout
@@ -307,22 +333,34 @@ public actor USBClient {
         defer { release() }
         if stopped { throw USBError.stopped }
         guard checkInterface() else { throw USBError.notConnected }
-        requested.append(route)
-        do {
-            let url = URL(string: path, relativeTo: host)!.absoluteURL
-            let (status, body) =
-                if let body {
-                    try await transport.post(url, body: body, contentType: contentType, timeout: timeout)
-                } else {
-                    try await transport.get(url, timeout: timeout)
-                }
-            guard (200 ..< 300).contains(status) else { throw USBError.http(route: path, status: status) }
-            return body
-        } catch let error as USBError {
-            if case .timedOut = error { stopped = true }
-            throw error
+        let url = URL(string: path, relativeTo: host)!.absoluteURL
+        var attempt = 0
+        while true {
+            requested.append(route)
+            do {
+                let (status, body) =
+                    if let body {
+                        try await transport.post(url, body: body, contentType: contentType, timeout: timeout)
+                    } else {
+                        try await transport.get(url, timeout: timeout)
+                    }
+                guard (200 ..< 300).contains(status) else { throw USBError.http(route: path, status: status) }
+                return body
+            } catch USBError.localNetworkDenied where attempt < Self.localNetworkRetries.count {
+                // macOS may refuse the first request while it asks whether the app may use the local network
+                // (TN3179). The connection never opened, so nothing reached the tablet, and sending again is safe.
+                await wait(Self.localNetworkRetries[attempt])
+                attempt += 1
+            } catch let error as USBError {
+                if case .timedOut = error { stopped = true }
+                throw error
+            }
         }
     }
+
+    /// The waits before each new try after macOS refused the local network:
+    /// long enough for the owner to answer macOS's question, short enough for a client's call.
+    static let localNetworkRetries: [Duration] = [.seconds(3), .seconds(5)]
 
     private func acquire() async {
         if !busy {

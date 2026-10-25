@@ -14,25 +14,33 @@ import RePossessUSB
 /// - Parameters:
 ///   - usb: Makes a USB client; each refresh gets a new one, which stops after its first timeout.
 ///   - usbPresent: Whether the Mac is on the tablet's USB network.
+///   - usbByApp: Does the USB step in rePossess.app, or returns `nil` when the app is not running;
+///     see ``AppLink/refreshUSB(library:timeout:progress:)``. The app also sends the queue,
+///     so this process then sends it only through the cloud.
 public func refreshLibrary(
     _ library: Library,
     _ source: RefreshSource,
     session: CloudSession,
     usb: @escaping @Sendable () -> USBClient = { USBClient() },
     usbPresent: @Sendable () -> Bool = USBNetwork.isPresent,
+    usbByApp: (@Sendable () async throws -> RefreshReport?)? = nil,
     pushes: PushPaths? = nil,
     progress: @escaping @Sendable (String) -> Void = { _ in }
 ) async throws -> [RefreshReport] {
+    let usbStep: @Sendable () async throws -> RefreshReport = {
+        if let usbByApp, let report = try await usbByApp() { return report }
+        return try await library.refreshUSB(client: usb(), progress: progress)
+    }
     var reports = try await refreshOnly(
         library,
         source,
         session: session,
-        usb: usb,
+        usbStep: usbStep,
         usbPresent: usbPresent,
         progress: progress
     )
     if var paths = pushes, !reports.isEmpty {
-        if reports.contains(where: { $0.source == .usb && $0.stoppedBy != nil }) { paths.usb = nil }
+        if reports.contains(where: { $0.source == .usb && ($0.stoppedBy != nil || $0.byApp) }) { paths.usb = nil }
         do {
             reports[reports.count - 1].pushes = try await library.sendPushes(paths: paths, progress: progress)
         } catch {
@@ -46,20 +54,20 @@ private func refreshOnly(
     _ library: Library,
     _ source: RefreshSource,
     session: CloudSession,
-    usb: @Sendable () -> USBClient,
+    usbStep: @Sendable () async throws -> RefreshReport,
     usbPresent: @Sendable () -> Bool,
     progress: @escaping @Sendable (String) -> Void
 ) async throws -> [RefreshReport] {
     switch source {
     case .usb:
-        return [try await library.refreshUSB(client: usb(), progress: progress)]
+        return [try await usbStep()]
     case .cloud:
         return [try await library.refreshCloud(session: session, progress: progress)]
     case .auto:
         var reports: [RefreshReport] = []
         if usbPresent() {
             do {
-                let report = try await library.refreshUSB(client: usb(), progress: progress)
+                let report = try await usbStep()
                 if report.stoppedBy == nil { return [report] }
                 reports.append(report)
             } catch let error as RefreshError {

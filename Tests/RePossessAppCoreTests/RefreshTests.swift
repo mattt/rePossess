@@ -88,6 +88,9 @@ final class GatedRefresh: @unchecked Sendable {
         let cloudOnly = RefreshPaths(usbPresent: false, paired: true)
         #expect(cloudOnly.source(for: .schedule) == .cloud && cloudOnly.source(for: .usbAppeared) == nil)
         #expect(RefreshPaths(usbPresent: false, paired: false).source(for: .manual) == nil)
+        // A client's request through the helper is USB only, and never the cloud.
+        #expect(both.source(for: .client) == .usb && usbOnly.source(for: .client) == .usb)
+        #expect(cloudOnly.source(for: .client) == nil)
     }
 }
 

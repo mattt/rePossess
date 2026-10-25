@@ -67,16 +67,21 @@ public struct Pusher: Sendable {
     /// Downloads an https URL, with a limit in bytes.
     let fetch: @Sendable (URL, Int) async throws -> Data
     let progress: @Sendable (String) -> Void
+    /// Sends the queue through rePossess.app, or returns `nil` when the app is not running;
+    /// see ``AppLink/sendPushes(timeout:)``. It is tried when the tablet is on USB.
+    let byApp: (@Sendable () async throws -> [PushRecord]?)?
 
     public init(
         library: Library,
         paths: @escaping @Sendable () -> PushPaths,
         fetch: @escaping @Sendable (URL, Int) async throws -> Data = downloadHTTPS,
+        byApp: (@Sendable () async throws -> [PushRecord]?)? = nil,
         progress: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.library = library
         self.paths = paths
         self.fetch = fetch
+        self.byApp = byApp
         self.progress = progress
     }
 
@@ -132,8 +137,23 @@ public struct Pusher: Sendable {
 
     /// Sends what waits in the queue, and returns the state of one push.
     func send(_ record: PushRecord) async throws -> PushResult {
+        let paths = paths()
+        if let byApp, paths.usb != nil {
+            do {
+                if try await byApp() != nil {
+                    progress("rePossess.app sent the queue for this client.")
+                    return PushResult(try library.push(id: record.id) ?? record)
+                }
+            } catch is RefreshError {
+                return PushResult(try library.push(id: record.id) ?? record, busy: true)
+            } catch {
+                // The app took the request but did not answer; it may still be sending, so this process does not.
+                progress("rePossess.app did not finish sending the queue: \(error)")
+                return PushResult(try library.push(id: record.id) ?? record)
+            }
+        }
         do {
-            _ = try await library.sendPushes(paths: paths(), progress: progress)
+            _ = try await library.sendPushes(paths: paths, progress: progress)
         } catch is RefreshError {
             return PushResult(try library.push(id: record.id) ?? record, busy: true)
         } catch {
