@@ -41,6 +41,47 @@ public struct RefreshPaths: Sendable, Equatable {
     }
 }
 
+/// The kind of error that stopped a refresh, for the app's retries.
+public enum RefreshFailureKind: Sendable, Equatable {
+    /// The Mac could not reach the network: offline, no route, or no answer in time,
+    /// as at login before Wi-Fi connects (Mattt's first run, 2026-10-25).
+    case network
+    /// The cloud or the tablet refused the request with HTTP 4xx, which a retry does not change.
+    case refused
+    /// Anything else, such as a server error, which the schedule's long backoff handles.
+    case other
+
+    /// The kind of an error from a refresh.
+    public static func of(_ error: any Error) -> Self {
+        switch error {
+        case let error as URLError:
+            return Self.networkCodes.contains(error.code) ? .network : .other
+        case let error as USBError:
+            switch error {
+            case .notConnected, .network, .connectionLost, .localNetworkDenied: return .network
+            case .http(_, let status) where (400 ..< 500).contains(status): return .refused
+            default: return .other
+            }
+        case let error as CloudError:
+            switch error {
+            case .unauthorized, .registrationRefused: return .refused
+            case .http(let status, _) where (400 ..< 500).contains(status): return .refused
+            default: return .other
+            }
+        default:
+            let error = error as NSError
+            if error.domain == NSURLErrorDomain { return of(URLError(URLError.Code(rawValue: error.code))) }
+            return .other
+        }
+    }
+
+    /// The URL errors that mean the network was not there.
+    static let networkCodes: Set<URLError.Code> = [
+        .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
+        .timedOut, .dataNotAllowed, .internationalRoamingOff, .callIsActive,
+    ]
+}
+
 /// What one refresh did.
 public struct RefreshOutcome: Sendable, Equatable {
     public enum Result: Sendable, Equatable {
@@ -60,6 +101,22 @@ public struct RefreshOutcome: Sendable, Equatable {
     public var result: Result
     public var started: Date
     public var ended: Date
+    /// For a refresh that failed before it had a report, the kind of error.
+    public var failureKind: RefreshFailureKind?
+
+    public init(
+        trigger: RefreshTrigger,
+        result: Result,
+        started: Date,
+        ended: Date,
+        failureKind: RefreshFailureKind? = nil
+    ) {
+        self.trigger = trigger
+        self.result = result
+        self.started = started
+        self.ended = ended
+        self.failureKind = failureKind
+    }
 
     /// Whether the refresh counts as a failure for the schedule's backoff.
     public var isFailure: Bool {
@@ -141,14 +198,16 @@ public actor RefreshCoordinator {
         running = true
         defer { running = false }
         let result: RefreshOutcome.Result
+        var kind: RefreshFailureKind?
         do {
             result = .finished(try await refresh(source))
         } catch RefreshError.busy {
             result = .busyElsewhere
         } catch {
             result = .failed("\(error)")
+            kind = RefreshFailureKind.of(error)
         }
-        return RefreshOutcome(trigger: trigger, result: result, started: started, ended: clock())
+        return RefreshOutcome(trigger: trigger, result: result, started: started, ended: clock(), failureKind: kind)
     }
 }
 

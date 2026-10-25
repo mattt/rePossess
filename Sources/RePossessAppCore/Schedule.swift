@@ -48,6 +48,21 @@ public struct RefreshSchedule: Sendable, Equatable {
         return lastAttempt.addingTimeInterval(wait)
     }
 
+    /// The waits before each quick retry after a network failure: 15 and 30 seconds, then 1, 2, and 5 minutes,
+    /// then every 5 minutes while the network stays away. None is longer than the interval.
+    public static let quickRetries: [TimeInterval] = [15, 30, 60, 120, 300]
+
+    /// When to try again after network failures in a row, or `nil` when there were none
+    /// or scheduled refreshes are off.
+    ///
+    /// A refresh that fails because the Mac is offline sends nothing, so it is tried again soon,
+    /// apart from the long backoff for failures that reached a server.
+    public func quickRetryDate(after lastAttempt: Date, networkFailures: Int) -> Date? {
+        guard let interval, networkFailures > 0 else { return nil }
+        let wait = Self.quickRetries[min(networkFailures, Self.quickRetries.count) - 1]
+        return lastAttempt.addingTimeInterval(min(wait, interval))
+    }
+
     /// A label for an interval in the settings.
     public static func label(minutes: Int) -> String {
         switch minutes {
@@ -75,5 +90,73 @@ public struct USBAppearance: Sendable, Equatable {
     public mutating func update(present now: Bool) -> Bool {
         defer { present = now }
         return now && present != true
+    }
+}
+
+/// The app's failures in a row: network failures, which get quick retries,
+/// and other failures, which lengthen the wait for the next scheduled refresh.
+public struct RefreshBackoff: Sendable, Equatable {
+    /// Failures in a row that reached a server or the tablet, or were refused.
+    public private(set) var failures = 0
+    /// Failures in a row because the network was not there.
+    public private(set) var networkFailures = 0
+
+    public init() {}
+
+    /// Counts a refresh.
+    ///
+    /// A client's refresh through the helper does not count, nor does one that another process's lock
+    /// or a missing path stopped. A refusal (HTTP 4xx) gets no quick retry.
+    public mutating func record(_ outcome: RefreshOutcome) {
+        guard outcome.trigger != .client else { return }
+        switch outcome.result {
+        case .alreadyRunning, .busyElsewhere, .noPath:
+            return
+        case .failed where outcome.failureKind == .network:
+            networkFailures += 1
+        case .failed, .finished:
+            if outcome.isFailure {
+                failures += 1
+            } else {
+                failures = 0
+            }
+            networkFailures = 0
+        }
+    }
+
+    /// Starts the counts again, as "Refresh Now" does.
+    public mutating func reset() {
+        failures = 0
+        networkFailures = 0
+    }
+
+    /// Whether a refresh failed because the network was away, so that its return should start one.
+    public var waitsForNetwork: Bool { networkFailures > 0 }
+
+    /// When the next refresh is due.
+    /// - Parameters:
+    ///   - lastAttempt: The end of the app's last refresh.
+    ///   - latestRefresh: The latest refresh that finished, by any process.
+    public func nextDate(schedule: RefreshSchedule, lastAttempt: Date?, latestRefresh: Date?, now: Date) -> Date? {
+        if let lastAttempt, let quick = schedule.quickRetryDate(after: lastAttempt, networkFailures: networkFailures) {
+            return quick
+        }
+        let latest = [lastAttempt, latestRefresh].compactMap { $0 }.max()
+        return schedule.nextDate(after: latest, failures: failures, now: now)
+    }
+}
+
+/// Tells when the network returns, from `NWPathMonitor`'s reports.
+public struct NetworkReturn: Sendable, Equatable {
+    /// Whether the path was satisfied at the last report, or `nil` before the first.
+    public private(set) var satisfied: Bool?
+
+    public init() {}
+
+    /// Records a report.
+    /// - Returns: Whether the path became satisfied after a report that it was not.
+    public mutating func update(satisfied now: Bool) -> Bool {
+        defer { satisfied = now }
+        return now && satisfied == false
     }
 }

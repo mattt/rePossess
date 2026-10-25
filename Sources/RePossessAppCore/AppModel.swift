@@ -42,7 +42,8 @@ public final class AppModel {
     private static let intervalKey = "refreshIntervalMinutes"
     private var usb = USBAppearance()
     private var lastAttempt: Date?
-    private var failures = 0
+    private var backoff = RefreshBackoff()
+    private var network = NetworkReturn()
     private var loop: Task<Void, Never>?
     /// The tablet's USB network appeared while another refresh ran; refresh over USB when it ends.
     private var usbWaiting = false
@@ -141,8 +142,12 @@ public final class AppModel {
 
     /// When the next scheduled refresh is due, counting refreshes by `repossess` in other processes.
     public var nextRefresh: Date? {
-        let latest = [lastAttempt, snapshot.library?.latestRefresh?.date].compactMap { $0 }.max()
-        return schedule.nextDate(after: latest, failures: failures, now: Date())
+        backoff.nextDate(
+            schedule: schedule,
+            lastAttempt: lastAttempt,
+            latestRefresh: snapshot.library?.latestRefresh?.date,
+            now: Date()
+        )
     }
 
     // MARK: Background work
@@ -151,8 +156,9 @@ public final class AppModel {
     public func start() {
         guard loop == nil else { return }
         let monitor = NWPathMonitor()
-        monitor.pathUpdateHandler = { [weak self] _ in
-            Task { @MainActor in self?.tick(scheduled: false) }
+        monitor.pathUpdateHandler = { [weak self] path in
+            let satisfied = path.status == .satisfied
+            Task { @MainActor in self?.networkChanged(satisfied: satisfied) }
         }
         monitor.start(queue: DispatchQueue(label: "co.dododo.repossess.network"))
         self.monitor = monitor
@@ -238,6 +244,15 @@ public final class AppModel {
         }
     }
 
+    /// Checks for the tablet, and tries a refresh that failed for want of the network again when the network returns.
+    func networkChanged(satisfied: Bool) {
+        let returned = network.update(satisfied: satisfied)
+        tick(scheduled: false)
+        guard returned, backoff.waitsForNetwork, !refreshing else { return }
+        Log.refresh.notice("The network returned; trying the refresh again")
+        refresh(.schedule)
+    }
+
     /// Checks for the tablet's USB network and the schedule, and starts a refresh when one is due.
     func tick(scheduled: Bool) {
         if usb.update(present: USBNetwork.isPresent()) {
@@ -259,7 +274,7 @@ public final class AppModel {
     public func refresh(_ trigger: RefreshTrigger = .manual) {
         guard library != nil, !refreshing else { return }
         refreshing = true
-        if trigger == .manual { failures = 0 }
+        if trigger == .manual { backoff.reset() }
         Task {
             let outcome = await coordinator.run(trigger)
             finish(outcome)
@@ -269,11 +284,11 @@ public final class AppModel {
     private func finish(_ outcome: RefreshOutcome) {
         refreshing = false
         // A client's USB refresh does not move the schedule or its backoff.
-        if outcome.result != .alreadyRunning, outcome.trigger != .client {
+        if outcome.result != .alreadyRunning {
             lastOutcome = outcome
-            lastAttempt = outcome.ended
-            failures = outcome.isFailure ? failures + 1 : 0
+            if outcome.trigger != .client { lastAttempt = outcome.ended }
         }
+        backoff.record(outcome)
         // `repossess` in another process was refreshing; try once more in a minute,
         // so that a tablet that connects during a client's refresh is still read over USB.
         if outcome.result == .busyElsewhere, outcome.trigger != .schedule {

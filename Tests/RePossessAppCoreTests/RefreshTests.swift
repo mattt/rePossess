@@ -189,3 +189,93 @@ final class GatedRefresh: @unchecked Sendable {
         #expect(outcome.summary.contains("1 of 1 pushes sent"))
     }
 }
+
+@Suite struct NetworkRetryTests {
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func outcome(
+        _ result: RefreshOutcome.Result,
+        kind: RefreshFailureKind? = nil,
+        trigger: RefreshTrigger = .schedule,
+        at end: Date
+    ) -> RefreshOutcome {
+        RefreshOutcome(trigger: trigger, result: result, started: end, ended: end, failureKind: kind)
+    }
+
+    @Test func errorsAreSortedByWhetherARetrySoonCanHelp() {
+        #expect(RefreshFailureKind.of(URLError(.notConnectedToInternet)) == .network)
+        #expect(RefreshFailureKind.of(URLError(.networkConnectionLost)) == .network)
+        #expect(RefreshFailureKind.of(URLError(.cannotFindHost)) == .network)
+        #expect(RefreshFailureKind.of(URLError(.timedOut)) == .network)
+        #expect(
+            RefreshFailureKind.of(NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)) == .network
+        )
+        #expect(RefreshFailureKind.of(USBError.localNetworkDenied) == .network)
+        #expect(RefreshFailureKind.of(CloudError.unauthorized(status: 401)) == .refused)
+        #expect(RefreshFailureKind.of(CloudError.http(status: 404, message: "")) == .refused)
+        #expect(RefreshFailureKind.of(CloudError.http(status: 503, message: "")) == .other)
+        #expect(RefreshFailureKind.of(USBError.timedOut(route: "/documents/", seconds: 10)) == .other)
+        #expect(RefreshFailureKind.of(CloudError.keychainTimedOut) == .other)
+    }
+
+    @Test func theCoordinatorSaysWhyARefreshFailed() async {
+        let coordinator = RefreshCoordinator(paths: { RefreshPaths(usbPresent: false, paired: true) }) { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+        let outcome = await coordinator.run(.schedule)
+        #expect(outcome.isFailure && outcome.failureKind == .network)
+    }
+
+    @Test func anOfflineFailureIsTriedAgainSoonAndThenEveryFiveMinutes() {
+        let schedule = RefreshSchedule()
+        var backoff = RefreshBackoff()
+        var waits: [TimeInterval] = []
+        var now = start
+        for _ in 0 ..< 7 {
+            backoff.record(outcome(.failed("offline"), kind: .network, at: now))
+            let next = backoff.nextDate(schedule: schedule, lastAttempt: now, latestRefresh: nil, now: now)!
+            waits.append(next.timeIntervalSince(now))
+            now = next
+        }
+        #expect(waits == [15, 30, 60, 120, 300, 300, 300])
+        #expect(backoff.failures == 0 && backoff.waitsForNetwork)
+
+        // A success ends the quick retries; the schedule goes on from the success.
+        backoff.record(outcome(.finished([RefreshReport(source: .cloud)]), at: now))
+        #expect(!backoff.waitsForNetwork)
+        #expect(backoff.nextDate(schedule: schedule, lastAttempt: now, latestRefresh: now, now: now) == now + 900)
+    }
+
+    @Test func noQuickRetryAfterARefusalOrWithoutASchedule() {
+        var backoff = RefreshBackoff()
+        backoff.record(outcome(.failed("HTTP 401"), kind: .refused, at: start))
+        #expect(!backoff.waitsForNetwork && backoff.failures == 1)
+        #expect(
+            backoff.nextDate(schedule: RefreshSchedule(), lastAttempt: start, latestRefresh: nil, now: start)
+                == start + 1800
+        )
+
+        var offline = RefreshBackoff()
+        offline.record(outcome(.failed("offline"), kind: .network, at: start))
+        let off = RefreshSchedule(intervalMinutes: 0)
+        #expect(offline.nextDate(schedule: off, lastAttempt: start, latestRefresh: nil, now: start) == nil)
+        #expect(off.quickRetryDate(after: start, networkFailures: 1) == nil)
+    }
+
+    @Test func aClientsRefreshAndAnotherProcessesLockDoNotCount() {
+        var backoff = RefreshBackoff()
+        backoff.record(outcome(.failed("offline"), kind: .network, at: start))
+        backoff.record(outcome(.failed("offline"), kind: .network, trigger: .client, at: start))
+        backoff.record(outcome(.busyElsewhere, at: start))
+        #expect(backoff.networkFailures == 1)
+        backoff.reset()
+        #expect(backoff == RefreshBackoff())
+    }
+
+    @Test func theNetworkReturnsOnlyAfterItWasAway() {
+        var network = NetworkReturn()
+        let reports = [true, true, false, true, true].map { network.update(satisfied: $0) }
+        // The first report is at launch; only the report after one that was not satisfied is a return.
+        #expect(reports == [false, false, false, true, false])
+    }
+}
