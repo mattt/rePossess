@@ -87,7 +87,7 @@ public actor BackgroundRecognition {
         }
         lastRun = run
         if run.exitStatus == 0 {
-            Log.recognition.info("Recognition finished: \(run.lastLine)")
+            Log.recognition.notice("Recognition finished: \(run.lastLine)")
         } else {
             Log.recognition.error("Recognition exited with \(run.exitStatus): \(run.lastLine)")
         }

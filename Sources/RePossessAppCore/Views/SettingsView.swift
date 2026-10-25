@@ -5,13 +5,10 @@ import SwiftUI
 
 /// The settings window: refreshes and login, pairing, the recognizer, and the MCP clients.
 struct SettingsView: View {
-    static let windowID = "settings"
-
     @Bindable var model: AppModel
-    @Binding var tab: SettingsTab
 
     var body: some View {
-        TabView(selection: $tab) {
+        TabView(selection: $model.settingsTab) {
             GeneralSettings(model: model)
                 .tabItem { Label("General", systemImage: "gearshape") }
                 .tag(SettingsTab.general)
@@ -25,7 +22,7 @@ struct SettingsView: View {
                 .tabItem { Label("MCP Clients", systemImage: "terminal") }
                 .tag(SettingsTab.clients)
         }
-        .frame(width: 620)
+        .frame(width: 640, height: 600)
         .padding()
     }
 }
@@ -265,7 +262,7 @@ struct RecognizerSettings: View {
             Section("Now") {
                 Text(model.snapshot.recognizerLine)
                 if let configuration = model.recognizer {
-                    Text("Where page images go: \(configuration.destination).").foregroundStyle(.secondary)
+                    Text(Self.whereImagesGo(configuration)).foregroundStyle(.secondary)
                 }
             }
             if provider == .mlx || model.recognizer?.provider == .mlx {
@@ -286,7 +283,7 @@ struct RecognizerSettings: View {
             .foregroundStyle(.orange)
             Toggle("Send page images to \(configuration.receivingHost ?? "the provider")", isOn: $consent)
         case .success(let configuration):
-            Text("Page images stay on this Mac: \(configuration.destination).").foregroundStyle(.secondary)
+            Text(Self.whereImagesGo(configuration)).foregroundStyle(.secondary)
         case .failure(let error):
             Text(error.description).foregroundStyle(.secondary)
         case nil:
@@ -317,6 +314,15 @@ struct RecognizerSettings: View {
         modelName = configuration.model ?? ""
         baseURL = configuration.baseURL?.absoluteString ?? ""
         consent = configuration.sendsPageImages
+    }
+
+    /// Where page images go, in one sentence.
+    static func whereImagesGo(_ configuration: RecognizerConfiguration) -> String {
+        if configuration.sendsPageImages {
+            return "Page images leave this Mac and go to \(configuration.destination)."
+        }
+        if configuration.provider == .ollama { return "Page images go to \(configuration.destination)." }
+        return "Page images stay on this Mac."
     }
 
     static func name(_ provider: RecognizerProvider) -> String {

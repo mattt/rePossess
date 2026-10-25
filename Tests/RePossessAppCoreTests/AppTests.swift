@@ -20,6 +20,8 @@ import Testing
             environment: ["REPOSSESS_LIBRARY": "/tmp/invented-other", "REPOSSESS_NO_KEYCHAIN": "1"]
         )
         #expect(fromEnvironment.libraryRoot.path == "/tmp/invented-other" && !fromEnvironment.usesKeychain)
+        #expect(options.settingsAtLaunch == nil)
+        #expect(AppOptions(arguments: ["--settings", "clients"], environment: [:]).settingsAtLaunch == .clients)
         let plain = AppOptions(arguments: [], environment: [:])
         #expect(plain.isDefaultLibrary && plain.usesKeychain && plain.libraryRoot == Library.defaultRoot)
     }

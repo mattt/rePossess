@@ -28,11 +28,19 @@ public struct AppOptions: Sendable, Equatable {
     public var isDefaultLibrary: Bool
     /// Whether the app may use the Keychain.
     public var usesKeychain: Bool
+    /// The settings tab to open at launch, from `--settings <tab>`, for checks and screenshots.
+    public var settingsAtLaunch: SettingsTab?
 
-    public init(libraryRoot: URL, isDefaultLibrary: Bool, usesKeychain: Bool) {
+    public init(
+        libraryRoot: URL,
+        isDefaultLibrary: Bool,
+        usesKeychain: Bool,
+        settingsAtLaunch: SettingsTab? = nil
+    ) {
         self.libraryRoot = libraryRoot
         self.isDefaultLibrary = isDefaultLibrary
         self.usesKeychain = usesKeychain
+        self.settingsAtLaunch = settingsAtLaunch
     }
 
     /// Reads the options from the command line and the environment.
@@ -43,11 +51,13 @@ public struct AppOptions: Sendable, Equatable {
     ) {
         var library = environment["REPOSSESS_LIBRARY"].flatMap { $0.isEmpty ? nil : $0 }
         var keychain = !["1", "true", "yes"].contains(environment["REPOSSESS_NO_KEYCHAIN"]?.lowercased() ?? "")
+        var settings: SettingsTab? = nil
         var rest = arguments[...]
         while let argument = rest.popFirst() {
             switch argument {
             case "--library": library = rest.popFirst() ?? library
             case "--no-keychain": keychain = false
+            case "--settings": settings = rest.popFirst().flatMap(SettingsTab.init(rawValue:)) ?? .general
             default: continue
             }
         }
@@ -56,10 +66,16 @@ public struct AppOptions: Sendable, Equatable {
             self.init(
                 libraryRoot: url,
                 isDefaultLibrary: url.standardizedFileURL.path == Library.defaultRoot.standardizedFileURL.path,
-                usesKeychain: keychain
+                usesKeychain: keychain,
+                settingsAtLaunch: settings
             )
         } else {
-            self.init(libraryRoot: Library.defaultRoot, isDefaultLibrary: true, usesKeychain: keychain)
+            self.init(
+                libraryRoot: Library.defaultRoot,
+                isDefaultLibrary: true,
+                usesKeychain: keychain,
+                settingsAtLaunch: settings
+            )
         }
     }
 

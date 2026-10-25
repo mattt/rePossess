@@ -27,6 +27,8 @@ public final class AppModel {
     public private(set) var lastOutcome: RefreshOutcome?
     public private(set) var recognizing = false
     public private(set) var lastRecognition: String?
+    /// The settings window's tab.
+    public var settingsTab = SettingsTab.general
 
     /// The refresh interval; the settings change it, and `UserDefaults` keeps it.
     public var intervalMinutes: Int {
@@ -150,6 +152,10 @@ public final class AppModel {
         }
         monitor.start(queue: DispatchQueue(label: "co.dododo.repossess.network"))
         self.monitor = monitor
+        // The status lines hold counts, times, and error messages, not document names.
+        Log.refresh.notice("Started with the status: \(self.snapshot.lines.joined(separator: " | "), privacy: .public)")
+        // Pages that a refresh by `repossess` brought while the app was closed wait too.
+        recognizeInBackground()
         loop = Task { [weak self] in
             while !Task.isCancelled {
                 self?.tick(scheduled: true)
@@ -195,7 +201,7 @@ public final class AppModel {
             lastAttempt = outcome.ended
             failures = outcome.isFailure ? failures + 1 : 0
         }
-        Log.refresh.info("\(outcome.trigger.rawValue, privacy: .public): \(outcome.summary)")
+        Log.refresh.notice("\(outcome.trigger.rawValue, privacy: .public): \(outcome.summary)")
         updateSnapshot()
         if usbWaiting {
             usbWaiting = false
@@ -218,6 +224,7 @@ public final class AppModel {
                 == nil
         else { return }
         recognizing = true
+        Log.recognition.notice("Recognizing \(waiting) pages in the background")
         Task {
             let result = await recognition.run(
                 configuration: configuration,
