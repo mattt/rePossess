@@ -161,3 +161,31 @@ private func pixel(_ png: Data, x: Int, y: Int) -> (r: UInt8, g: UInt8, b: UInt8
         )
     }
 }
+
+@Suite struct StrokesOnlyTests {
+    @Test func strokesOnlyDropsTheTextAndKeepsTheStrokes() throws {
+        var page = PageBuilder()
+        page.paragraphs = [StyledParagraph(.heading, "A heading in large type")]
+        page.groups = [.init(lines: [PageBuilder.stroke([(-300, 900), (300, 900)])])]
+        let full = try scene(page)
+        let strokes = full.strokesOnly()
+        #expect(strokes.hasStrokes && !strokes.drawsText && strokes.pdfPage == nil)
+        #expect(strokes.width == full.width && strokes.height == full.height)
+        let withText = try PageRenderer.render(full, maxWidth: full.width, maxHeight: full.height)
+        let without = try PageRenderer.render(strokes, maxWidth: strokes.width, maxHeight: strokes.height)
+        // The heading's first glyph is dark in the full page and blank without the text.
+        let line = try #require(full.layout?.lines.first)
+        let x = Int(line.x) + 12
+        let y = Int(line.baseline) - 20
+        let darkest = (-8 ... 8).map { pixel(withText.png, x: x + $0, y: y).r }.min()!
+        #expect(darkest < 128)
+        #expect((-8 ... 8).allSatisfy { pixel(without.png, x: x + $0, y: y).r > 250 })
+        #expect(pixel(without.png, x: 702, y: 900).r < 128)
+    }
+
+    @Test func aPageWithoutStrokesHasNone() throws {
+        var page = PageBuilder()
+        page.paragraphs = [StyledParagraph(.plain, "Text")]
+        #expect(!(try scene(page)).hasStrokes)
+    }
+}

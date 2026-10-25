@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// One paragraph of typed text, with its tablet style.
@@ -23,6 +24,16 @@ public struct PageContent: Sendable, Equatable {
     public var highlights: [String]
     /// The strokes that draw: every visible stroke except erasers.
     public var strokeCount: Int
+    /// A SHA-256 hash of the strokes that draw, in hexadecimal, or `nil` for a page without them.
+    ///
+    /// It covers each stroke's tool, color, thickness, and points (x, y, and width),
+    /// the anchor and x origin of each group, and the page's size,
+    /// in the order of the scene tree.
+    /// Recognized handwriting is cached under it,
+    /// so a page is recognized again only when its strokes change.
+    /// Typed text is not in the hash: a stroke group anchored to the text
+    /// keeps its hash when the text moves it.
+    public var strokeHash: String?
     /// Problems the reader skipped; see ``readPage(_:)``.
     public var warnings: [String]
 
@@ -30,11 +41,13 @@ public struct PageContent: Sendable, Equatable {
         paragraphs: [TypedParagraph] = [],
         highlights: [String] = [],
         strokeCount: Int = 0,
+        strokeHash: String? = nil,
         warnings: [String] = []
     ) {
         self.paragraphs = paragraphs
         self.highlights = highlights
         self.strokeCount = strokeCount
+        self.strokeHash = strokeHash
         self.warnings = warnings
     }
 
@@ -99,22 +112,69 @@ public func pageContent(_ result: PageReadResult) -> PageContent {
             content.warnings.append("The typed text could not be read: \(error)")
         }
     }
+    var hasher = StrokeHasher()
+    if let size = result.tree.sceneInfo?.paperSize {
+        hasher.add("size", UInt64(size.0), UInt64(size.1))
+    }
     do {
         try visit(result.tree.root) { item in
             switch item {
             case .line(let line):
-                if !line.tool.isEraser, !line.points.isEmpty { content.strokeCount += 1 }
+                if !line.tool.isEraser, !line.points.isEmpty {
+                    content.strokeCount += 1
+                    hasher.add(line)
+                }
             case .glyphRange(let glyph):
                 let text = glyph.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !text.isEmpty { content.highlights.append(text) }
-            case .group:
-                break
+            case .group(let group):
+                hasher.add(group)
             }
         }
     } catch {
         content.warnings.append("The strokes could not be read: \(error)")
     }
+    if content.strokeCount > 0 { content.strokeHash = hasher.hex }
     return content
+}
+
+/// Hashes the strokes of a page for ``PageContent/strokeHash``.
+struct StrokeHasher {
+    private var hash = SHA256()
+
+    mutating func add(_ tag: String, _ values: UInt64...) {
+        hash.update(data: Data(tag.utf8))
+        for value in values {
+            withUnsafeBytes(of: value.littleEndian) { hash.update(bufferPointer: $0) }
+        }
+    }
+
+    mutating func add(_ group: Group) {
+        add(
+            "group",
+            group.anchorId?.value.part1 ?? 0,
+            group.anchorId?.value.part2 ?? 0,
+            UInt64(group.anchorOriginX?.value.bitPattern ?? 0)
+        )
+    }
+
+    mutating func add(_ line: Line) {
+        add(
+            "line",
+            UInt64(line.tool.rawValue),
+            UInt64(line.color.rawValue),
+            line.colorRGBA.map { UInt64($0.r) << 24 | UInt64($0.g) << 16 | UInt64($0.b) << 8 | UInt64($0.a) } ?? 0,
+            line.thicknessScale.bitPattern,
+            UInt64(line.points.count)
+        )
+        for point in line.points {
+            add("", point.x.bitPattern, point.y.bitPattern, UInt64(bitPattern: Int64(point.width)))
+        }
+    }
+
+    var hex: String {
+        hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 /// Calls `body` for every item under `group`, skipping hidden groups and deleted items.

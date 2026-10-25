@@ -54,6 +54,8 @@ public struct PageScene {
     var highlights: [GlyphRange] = []
     /// What could not be read or placed.
     public var warnings: [String] = []
+    /// Whether to draw the typed text. The layout still places anchored strokes.
+    public var drawsText = true
 
     /// The page size when a page names none: the Paper Pure's and the reMarkable 2's display.
     public static let defaultSize = CGSize(width: 1404, height: 1872)
@@ -211,6 +213,20 @@ public struct PageScene {
         return order.map { (groups[$0]!.0, groups[$0]!.1, groups[$0]!.2) }
     }
 
+    /// The page with only its strokes, for the recognizer:
+    /// no PDF page, no typed text, and no highlights, which rePossess already reads as text.
+    /// Strokes anchored to the text stay where the text puts them.
+    public func strokesOnly() -> PageScene {
+        var scene = self
+        scene.pdfPage = nil
+        scene.drawsText = false
+        scene.highlights = []
+        return scene
+    }
+
+    /// Whether the page has strokes to draw.
+    public var hasStrokes: Bool { !strokes.isEmpty }
+
     /// Whether the page draws anything.
     public var isEmpty: Bool {
         strokes.isEmpty && highlights.isEmpty && pdfPage == nil && (layout?.lines.isEmpty ?? true)
@@ -292,7 +308,7 @@ public enum PageRenderer {
             }
         }
 
-        if let layout = scene.layout { drawText(layout, in: context) }
+        if scene.drawsText, let layout = scene.layout { drawText(layout, in: context) }
 
         context.setLineCap(.round)
         context.setLineJoin(.round)
