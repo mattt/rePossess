@@ -6,7 +6,35 @@ import Testing
 @testable import RePossessLibrary
 @testable import RePossessRecognize
 
+/// The preferences suites that one test creates.
+///
+/// Each suite name is unique, so tests never share state,
+/// and `deinit` removes the suites when the test's suite instance goes away,
+/// so a test run leaves no files in `~/Library/Preferences`.
+final class TestPreferences {
+    private var names: [String] = []
+
+    func make() -> UserDefaults {
+        let name = "repossess-test-\(UUID().uuidString)"
+        names.append(name)
+        return UserDefaults(suiteName: name)!
+    }
+
+    deinit {
+        let folder = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Preferences", directoryHint: .isDirectory)
+        for name in names {
+            // Removing the domain leaves an empty file, so delete the file too.
+            UserDefaults.standard.removePersistentDomain(forName: name)
+            CFPreferencesAppSynchronize(name as CFString)
+            try? FileManager.default.removeItem(at: folder.appending(path: "\(name).plist"))
+        }
+    }
+}
+
 @Suite struct OptionsTests {
+    let preferences = TestPreferences()
+
     @Test func takesTheLibraryAndTheKeychainSwitchLikeTheCommand() {
         let options = AppOptions(
             arguments: ["-NSDocumentRevisionsDebugMode", "YES", "--library", "/tmp/invented-library", "--no-keychain"],
@@ -41,7 +69,7 @@ import Testing
 
     @MainActor @Test func appRefusesToPairWithoutTheKeychain() async throws {
         let library = try temporaryLibrary("model")
-        let defaults = UserDefaults(suiteName: "repossess-test-\(UUID().uuidString)")!
+        let defaults = preferences.make()
         let model = AppModel(
             options: AppOptions(libraryRoot: library.root, isDefaultLibrary: false, usesKeychain: false),
             defaults: defaults
@@ -324,6 +352,8 @@ import Testing
 }
 
 @Suite struct ConsentTests {
+    let preferences = TestPreferences()
+
     func configuration(
         _ provider: RecognizerProvider,
         model: String? = "invented-model",
@@ -394,7 +424,7 @@ import Testing
         let library = try temporaryLibrary("consent")
         let model = AppModel(
             options: AppOptions(libraryRoot: library.root, isDefaultLibrary: false, usesKeychain: false),
-            defaults: UserDefaults(suiteName: "repossess-test-\(UUID().uuidString)")!
+            defaults: preferences.make()
         )
         let anthropic = try configuration(.anthropic)
         let openai = try configuration(.openai)
@@ -427,6 +457,8 @@ import Testing
 }
 
 @Suite struct RecognizerSetupTests {
+    let preferences = TestPreferences()
+
     @Test func theDraftGivesGuidanceForEachField() throws {
         var draft = RecognizerDraft(provider: .anthropic)
         #expect(draft.showsModel && !draft.showsAddress)
@@ -495,7 +527,7 @@ import Testing
         let library = try temporaryLibrary("readiness")
         let model = AppModel(
             options: AppOptions(libraryRoot: library.root, isDefaultLibrary: false, usesKeychain: false),
-            defaults: UserDefaults(suiteName: "repossess-test-\(UUID().uuidString)")!
+            defaults: preferences.make()
         )
         #expect(model.recognizerReadiness == .off)
         let anthropic = try RecognizerConfiguration(provider: .anthropic, model: "invented-model")
@@ -653,8 +685,10 @@ import Testing
 }
 
 @Suite struct SetupTests {
+    let preferences = TestPreferences()
+
     func defaults() -> UserDefaults {
-        UserDefaults(suiteName: "repossess-test-\(UUID().uuidString)")!
+        preferences.make()
     }
 
     @Test func theSetupOpensOnceAndOnlyWithoutAWayToTheTablet() {
