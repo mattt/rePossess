@@ -138,6 +138,28 @@ import Testing
         #expect(StatusSnapshot.age(now.addingTimeInterval(-3 * 86400), now: now) == "3 days ago")
         #expect(StatusSnapshot.shorten(String(repeating: "x", count: 200)).count == 90)
     }
+
+    @Test func timesUntilTheNextRefreshInWholeMinutes() {
+        #expect(StatusSnapshot.until(now.addingTimeInterval(20), now: now) == "in less than a minute")
+        #expect(StatusSnapshot.until(now.addingTimeInterval(-5), now: now) == "in less than a minute")
+        #expect(StatusSnapshot.until(now.addingTimeInterval(65), now: now) == "in about 1 minute")
+        #expect(StatusSnapshot.until(now.addingTimeInterval(12 * 60 + 10), now: now) == "in about 12 minutes")
+        #expect(StatusSnapshot.until(now.addingTimeInterval(59 * 60 + 50), now: now) == "in about 1 hour")
+        #expect(StatusSnapshot.until(now.addingTimeInterval(6 * 3600), now: now) == "in about 6 hours")
+        #expect(StatusSnapshot.until(now.addingTimeInterval(86_400), now: now) == "in about 1 day")
+    }
+
+    @Test func theLastAndNextRefreshReplaceTheCountdown() throws {
+        let library = try temporaryLibrary("status")
+        try library.recordRefreshSuccess(.usb, at: now.addingTimeInterval(-180))
+        var snapshot = StatusSnapshot(usbPresent: false, pairing: .notPaired, library: try library.status(), now: now)
+        #expect(snapshot.refreshTimes() == "Refreshed from USB 3 minutes ago")
+        snapshot.nextRefresh = now.addingTimeInterval(12 * 60)
+        #expect(snapshot.refreshTimes() == "Refreshed from USB 3 minutes ago · next in about 12 minutes")
+        #expect(snapshot.mirrorLine == "Mirror: refreshed from USB 3 minutes ago · next in about 12 minutes")
+        let empty = StatusSnapshot(usbPresent: false, pairing: .notPaired, nextRefresh: now, now: now)
+        #expect(empty.refreshTimes() == "Not refreshed yet · next in less than a minute")
+    }
 }
 
 @Suite struct ClientSetupTests {

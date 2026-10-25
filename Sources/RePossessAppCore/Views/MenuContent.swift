@@ -87,6 +87,12 @@ public struct RePossessMenuBarApp: App {
         let model = AppModel()
         SettingsWindow.shared.model = model
         model.start()
+        // Read the status again when the menu opens, so that its relative times are current.
+        NotificationCenter.default.addObserver(
+            forName: NSMenu.didBeginTrackingNotification,
+            object: nil,
+            queue: .main
+        ) { _ in MainActor.assumeIsolated { model.updateSnapshot() } }
         if let tab = model.options.settingsAtLaunch {
             Task { @MainActor in SettingsWindow.shared.show(tab) }
         }

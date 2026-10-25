@@ -135,6 +135,8 @@ public final class AppModel {
             usesKeychain: options.usesKeychain,
             usbPresent: USBNetwork.isPresent()
         )
+        // The next refresh counts the mirror's latest refresh, which the new snapshot has.
+        snapshot.nextRefresh = nextRefresh
     }
 
     /// The schedule from the settings.

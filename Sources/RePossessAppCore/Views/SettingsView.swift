@@ -65,10 +65,9 @@ struct GeneralSettings: View {
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)
-                if let next = model.nextRefresh {
-                    LabeledContent("Next scheduled refresh") {
-                        Text(next, style: .relative)
-                    }
+                LabeledContent("Mirror") {
+                    // Relative times in whole minutes, from the status that the app reads every 15 seconds.
+                    Text(model.snapshot.refreshTimes())
                 }
                 Button("Refresh Now") { model.refresh(.manual) }
                     .disabled(model.refreshing || model.library == nil)

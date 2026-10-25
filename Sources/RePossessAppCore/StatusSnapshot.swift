@@ -23,6 +23,8 @@ public struct StatusSnapshot: Sendable, Equatable {
     public var recognizer: RecognizerConfiguration?
     public var recognizerError: String?
     public var recognition: RecognitionCounts?
+    /// When the next scheduled refresh is due, or `nil` when the schedule is off.
+    public var nextRefresh: Date?
     public var now: Date
 
     public init(
@@ -34,8 +36,10 @@ public struct StatusSnapshot: Sendable, Equatable {
         recognizer: RecognizerConfiguration? = nil,
         recognizerError: String? = nil,
         recognition: RecognitionCounts? = nil,
+        nextRefresh: Date? = nil,
         now: Date = Date()
     ) {
+        self.nextRefresh = nextRefresh
         self.usbPresent = usbPresent
         self.pairing = pairing
         self.library = library
@@ -112,12 +116,28 @@ public struct StatusSnapshot: Sendable, Equatable {
         return "USB error\(when): \(Self.shorten(error))"
     }
 
-    /// The mirror's source and age.
+    /// The mirror's source and age, and when the next scheduled refresh is due.
     public var mirrorLine: String {
         if let libraryError { return "Library: \(Self.shorten(libraryError))" }
-        guard let latest = library?.latestRefresh else { return "Mirror: not refreshed yet" }
-        let source = latest.source == .usb ? "USB" : "the cloud"
-        return "Mirror: refreshed from \(source) \(Self.age(latest.date, now: now))"
+        return "Mirror: " + refreshTimes(capitalized: false)
+    }
+
+    /// The last refresh and the next, in relative times,
+    /// such as "Refreshed from USB 3 minutes ago · next in about 12 minutes".
+    ///
+    /// The times are in whole minutes, so the text changes at most once a minute;
+    /// the app reads the status every 15 seconds and when its menu opens.
+    public func refreshTimes(capitalized: Bool = true) -> String {
+        var text: String
+        if let latest = library?.latestRefresh {
+            let source = latest.source == .usb ? "USB" : "the cloud"
+            text = "refreshed from \(source) \(Self.age(latest.date, now: now))"
+        } else {
+            text = "not refreshed yet"
+        }
+        if capitalized { text = text.prefix(1).uppercased() + text.dropFirst() }
+        if let nextRefresh { text += " · next \(Self.until(nextRefresh, now: now))" }
+        return text
     }
 
     /// The queue of pushes.
@@ -170,6 +190,19 @@ public struct StatusSnapshot: Sendable, Equatable {
             default: (seconds / 86400, "day")
             }
         return "\(value) \(unit)\(value == 1 ? "" : "s") ago"
+    }
+
+    /// The time until a date in words, such as "in less than a minute" or "in about 12 minutes".
+    public static func until(_ date: Date, now: Date) -> String {
+        let seconds = date.timeIntervalSince(now)
+        if seconds < 60 { return "in less than a minute" }
+        let (value, unit): (Int, String) =
+            switch seconds {
+            case ..<3570: (Int((seconds / 60).rounded()), "minute")
+            case ..<86_400: (max(Int((seconds / 3600).rounded()), 1), "hour")
+            default: (Int((seconds / 86_400).rounded()), "day")
+            }
+        return "in about \(value) \(unit)\(value == 1 ? "" : "s")"
     }
 
     /// The first line of a message, at most 90 characters, for a menu item.
