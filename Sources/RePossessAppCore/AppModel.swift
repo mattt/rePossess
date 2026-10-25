@@ -27,8 +27,6 @@ public final class AppModel {
     public private(set) var lastOutcome: RefreshOutcome?
     public private(set) var recognizing = false
     public private(set) var lastRecognition: String?
-    /// The settings window's tab.
-    public var settingsTab = SettingsTab.general
 
     /// The refresh interval; the settings change it, and `UserDefaults` keeps it.
     public var intervalMinutes: Int {

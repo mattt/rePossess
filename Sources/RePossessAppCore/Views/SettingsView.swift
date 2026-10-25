@@ -4,27 +4,66 @@ import RePossessRecognize
 import SwiftUI
 
 /// The settings window: refreshes and login, pairing, the recognizer, and the MCP clients.
+///
+/// The `Settings` scene shows the panes as toolbar items with their symbols,
+/// titles the window with the open pane, and keeps the last pane in `UserDefaults`.
 struct SettingsView: View {
     @Bindable var model: AppModel
+    @AppStorage(SettingsTab.storageKey) private var pane = SettingsTab.general
 
     var body: some View {
-        TabView(selection: $model.settingsTab) {
-            GeneralSettings(model: model)
-                .tabItem { Label("General", systemImage: "gearshape") }
-                .tag(SettingsTab.general)
-            CloudSettings(model: model)
-                .tabItem { Label("Cloud", systemImage: "icloud") }
-                .tag(SettingsTab.cloud)
-            RecognizerSettings(model: model)
-                .tabItem { Label("Handwriting", systemImage: "scribble") }
-                .tag(SettingsTab.recognizer)
-            ClientSettings(model: model)
-                .tabItem { Label("MCP Clients", systemImage: "terminal") }
-                .tag(SettingsTab.clients)
+        TabView(selection: $pane) {
+            Tab("General", systemImage: "gearshape", value: .general) {
+                GeneralSettings(model: model).settingsPane()
+            }
+            Tab("Cloud", systemImage: "icloud", value: .cloud) {
+                CloudSettings(model: model).settingsPane()
+            }
+            Tab("Handwriting", systemImage: "scribble", value: .recognizer) {
+                RecognizerSettings(model: model).settingsPane()
+            }
+            Tab("MCP Clients", systemImage: "terminal", value: .clients) {
+                ClientSettings(model: model).settingsPane()
+            }
         }
-        .frame(width: 640, height: 600)
-        .padding()
+        .background(SettingsWindowBridge())
     }
+}
+
+extension View {
+    /// A pane's size: a stable width, and the content's height up to a bound, past which the pane scrolls.
+    func settingsPane() -> some View {
+        modifier(SettingsPaneSize())
+    }
+}
+
+/// Sizes a pane to its content: a grouped form reports no height of its own,
+/// so the pane measures the form at its ideal height and gives the window that height, up to a bound.
+struct SettingsPaneSize: ViewModifier {
+    @State private var height: CGFloat = SettingsLayout.minimumHeight
+
+    func body(content: Content) -> some View {
+        ScrollView {
+            content
+                .scrollDisabled(true)
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) {
+                    $0.size.height
+                } action: {
+                    height = $0
+                }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(width: SettingsLayout.width)
+        .frame(height: min(max(height, SettingsLayout.minimumHeight), SettingsLayout.maximumHeight))
+    }
+}
+
+/// The settings panes' dimensions, in points.
+enum SettingsLayout {
+    static let width: CGFloat = 600
+    static let minimumHeight: CGFloat = 200
+    static let maximumHeight: CGFloat = 640
 }
 
 // MARK: General
