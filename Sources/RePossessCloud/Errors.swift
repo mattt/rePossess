@@ -24,6 +24,9 @@ public enum CloudError: Error, Equatable, CustomStringConvertible {
     case notPaired(service: String)
     /// The Keychain refused to give the device token.
     case keychain(status: Int32, message: String)
+    /// The Keychain did not give the device token in time, most likely because macOS
+    /// is waiting for the user to allow the read.
+    case keychainTimedOut
 
     public var description: String {
         switch self {
@@ -40,6 +43,9 @@ public enum CloudError: Error, Equatable, CustomStringConvertible {
         case .notPaired(let service):
             "no device token in the login keychain under the service \"\(service)\"; pair rePossess first"
         case .keychain(let status, let message): "Keychain error \(status): \(message)"
+        case .keychainTimedOut:
+            "macOS did not give rePossess the device token in time; it may be asking for permission. "
+                + "Run `repossess refresh --cloud` in Terminal and choose Always Allow, then try again."
         }
     }
 

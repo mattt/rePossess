@@ -131,8 +131,9 @@ public struct TextLayout {
     /// How much wider reMarkable Sans sets text than Helvetica Neue, on average.
     /// On 288 body lines of spike 4's long note, the tablet's lines were 0.65 percent wider
     /// (standard deviation 0.5 percent), so lines wrap as if the column were that much narrower.
-    /// With this and the 4 px insets, 663 of the 726 lines on spike 4's 16 exported pages
-    /// break where the tablet breaks them; the rest differ by a word near the right edge.
+    /// With this and the 4 px insets, 663 of the 726 lines on 15 pages that the tablet exported
+    /// from spike 4's notebooks break where the tablet breaks them;
+    /// the rest differ by a word near the right edge.
     public static let widthCorrection: CGFloat = 1.0065
 
     public init() {}

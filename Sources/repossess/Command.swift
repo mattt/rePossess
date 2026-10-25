@@ -73,31 +73,6 @@ func printError(_ message: String) {
     FileHandle.standardError.write(Data((message + "\n").utf8))
 }
 
-/// Refreshes from a source; `auto` uses USB when the tablet's USB network is present
-/// and its web interface answers, and the cloud otherwise.
-func refresh(
-    _ library: Library,
-    _ source: RefreshSource,
-    session: CloudSession,
-    progress: @escaping @Sendable (String) -> Void
-) async throws -> [RefreshReport] {
-    switch source {
-    case .usb:
-        return [try await library.refreshUSB(progress: progress)]
-    case .cloud:
-        return [try await library.refreshCloud(session: session, progress: progress)]
-    case .auto:
-        if USBNetwork.isPresent() {
-            do {
-                return [try await library.refreshUSB(progress: progress)]
-            } catch USBError.interfaceOff {
-                progress("The tablet is connected, but its USB web interface is off; using the cloud.")
-            }
-        }
-        return [try await library.refreshCloud(session: session, progress: progress)]
-    }
-}
-
 func describe(_ report: RefreshReport) -> String {
     var lines = [
         "Source: \(report.source == .usb ? "USB" : "cloud")",
@@ -160,7 +135,7 @@ struct Repossess {
             let cloud = arguments.flags.contains("--cloud")
             guard !(usb && cloud) else { throw UsageError("give --usb or --cloud, not both") }
             let library = try Library(root: libraryRoot(arguments))
-            let reports = try await refresh(
+            let reports = try await refreshLibrary(
                 library,
                 usb ? .usb : (cloud ? .cloud : .auto),
                 session: CloudSession(),
@@ -195,11 +170,12 @@ struct Repossess {
 
         case "mcp":
             let library = try Library(root: libraryRoot(arguments))
-            let session = CloudSession()
+            // No one watches the server, so it waits at most 20 seconds for a Keychain dialog.
+            let session = CloudSession(tokenTimeout: .seconds(20))
             let tools = ReadTools(
                 library: library,
                 refresh: { source in
-                    try await refresh(library, source, session: session, progress: { printError($0) })
+                    try await refreshLibrary(library, source, session: session, progress: { printError($0) })
                 }
             )
             try await serveMCP(tools: tools, version: version)

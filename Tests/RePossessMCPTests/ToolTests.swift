@@ -2,6 +2,7 @@ import Foundation
 import MCP
 import Testing
 
+@testable import RePossessCloud
 @testable import RePossessFormat
 @testable import RePossessLibrary
 @testable import RePossessMCP
@@ -193,5 +194,54 @@ func json(_ result: CallTool.Result) throws -> [String: Any] {
         let status = try json(await call(tools, "status"))
         #expect(status["documents"] as? Int == 3)
         #expect((status["cloud"] as! [String: Any])["available"] as? Bool == true)
+    }
+}
+
+@Suite struct RefreshFallbackTests {
+    @Test func autoFallsBackToTheCloudAfterAUSBTimeout() async throws {
+        let tablet = FakeTablet()
+        await tablet.setHang(true)
+        let cloud = FakeCloud()
+        let entry = try await cloud.seedDocument(
+            id: "doc-cloud",
+            files: [
+                (
+                    "doc-cloud.metadata",
+                    Data(#"{"visibleName": "Invented", "type": "DocumentType", "parent": ""}"#.utf8)
+                ),
+                ("doc-cloud.content", Data(#"{"fileType": "notebook", "cPages": {"pages": []}}"#.utf8)),
+            ]
+        )
+        try await cloud.seedRoot([entry])
+        let library = try Library(
+            root: FileManager.default.temporaryDirectory.appending(path: "repossess-fallback-\(UUID().uuidString)")
+        )
+        let reports = try await refreshLibrary(
+            library,
+            .auto,
+            session: CloudSession(transport: cloud, deviceToken: { FakeCloud.deviceToken }),
+            usb: { USBClient(transport: tablet, checkInterface: { true }) },
+            usbPresent: { true }
+        )
+        #expect(reports.map(\.source) == [.usb, .cloud])
+        #expect(reports[0].stoppedBy?.contains("off and on") == true)
+        #expect(try library.documents().map(\.name) == ["Invented"])
+        #expect(await tablet.paths == ["/documents/"])
+    }
+
+    @Test func autoUsesOnlyTheCloudWithoutUSB() async throws {
+        let cloud = FakeCloud()
+        try await cloud.seedRoot([])
+        let library = try Library(
+            root: FileManager.default.temporaryDirectory.appending(path: "repossess-fallback-\(UUID().uuidString)")
+        )
+        let reports = try await refreshLibrary(
+            library,
+            .auto,
+            session: CloudSession(transport: cloud, deviceToken: { FakeCloud.deviceToken }),
+            usb: { fatalError("no USB client without the USB network") },
+            usbPresent: { false }
+        )
+        #expect(reports.map(\.source) == [.cloud])
     }
 }

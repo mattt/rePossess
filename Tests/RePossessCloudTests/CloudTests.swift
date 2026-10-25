@@ -211,4 +211,25 @@ enum Fixtures {
         let unpaired = CloudSession(transport: FakeCloud(), deviceToken: { throw CloudError.notPaired(service: "x") })
         await #expect(throws: CloudError.notPaired(service: "x")) { try await unpaired.client() }
     }
+
+    @Test func aSlowKeychainReadTimesOut() async throws {
+        let session = CloudSession(
+            transport: FakeCloud(),
+            deviceToken: {
+                Thread.sleep(forTimeInterval: 2)
+                return FakeCloud.deviceToken
+            },
+            tokenTimeout: .milliseconds(100)
+        )
+        let start = ContinuousClock.now
+        await #expect(throws: CloudError.keychainTimedOut) { try await session.client() }
+        #expect(ContinuousClock.now - start < .seconds(1))
+        #expect(CloudError.keychainTimedOut.description.contains("Always Allow"))
+        let quick = CloudSession(
+            transport: FakeCloud(),
+            deviceToken: { FakeCloud.deviceToken },
+            tokenTimeout: .seconds(5)
+        )
+        _ = try await quick.client()
+    }
 }

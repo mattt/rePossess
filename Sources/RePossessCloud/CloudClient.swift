@@ -93,20 +93,54 @@ public actor CloudSession {
     private let transport: any HTTPTransport
     private let deviceToken: @Sendable () throws -> String
     private let syncHost: URL?
+    private let tokenTimeout: Duration?
     private var userToken: String?
     private var expiry: Date?
 
     /// - Parameters:
     ///   - deviceToken: Reads the device token, such as ``DeviceTokenKeychain/read()``.
     ///   - syncHost: Overrides the sync host that the user token names.
+    ///   - tokenTimeout: How long to wait for the device token, or `nil` to wait as long as it takes.
+    ///     macOS can hold the Keychain read until the user answers a permission dialog;
+    ///     a server that no one watches should not wait forever.
     public init(
         transport: any HTTPTransport = URLSessionTransport(),
         deviceToken: @escaping @Sendable () throws -> String = DeviceTokenKeychain.read,
-        syncHost: URL? = nil
+        syncHost: URL? = nil,
+        tokenTimeout: Duration? = nil
     ) {
         self.transport = transport
         self.deviceToken = deviceToken
         self.syncHost = syncHost
+        self.tokenTimeout = tokenTimeout
+    }
+
+    /// Reads the device token on another thread, and gives up after `tokenTimeout`.
+    /// A read that times out keeps its thread until macOS answers it.
+    private func readDeviceToken() async throws -> String {
+        guard let tokenTimeout else { return try deviceToken() }
+        let read = deviceToken
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            let (stream, continuation) = AsyncThrowingStream<String, any Error>.makeStream()
+            Thread.detachNewThread {
+                do {
+                    continuation.yield(try read())
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            group.addTask {
+                for try await token in stream { return token }
+                throw CloudError.keychainTimedOut
+            }
+            group.addTask {
+                try await Task.sleep(for: tokenTimeout)
+                throw CloudError.keychainTimedOut
+            }
+            defer { group.cancelAll() }
+            return try await group.next()!
+        }
     }
 
     /// A client with a user token that is valid for at least five more minutes.
@@ -114,7 +148,8 @@ public actor CloudSession {
         if let userToken, let expiry, expiry.timeIntervalSinceNow > 300 {
             return CloudClient(transport: transport, userToken: userToken, syncHost: syncHost)
         }
-        let token = try await CloudAuth(transport: transport).renewUserToken(deviceToken: try deviceToken())
+        let device = try await readDeviceToken()
+        let token = try await CloudAuth(transport: transport).renewUserToken(deviceToken: device)
         userToken = token
         // Without an `exp` claim, renew after an hour; the live service hinted 3 hours (spike 6).
         expiry = (try? TokenClaims(jwt: token))?.expiration ?? Date().addingTimeInterval(3600)
