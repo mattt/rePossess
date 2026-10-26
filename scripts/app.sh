@@ -13,6 +13,9 @@
 #   Contents/MacOS/RePossessApp   the menu bar app
 #   Contents/MacOS/repossess      the command, which MCP clients start as `repossess mcp`
 #   Contents/Resources/*.bundle   SwiftPM's resource bundles, such as MLX's Metal library
+#   Contents/Resources/Assets.car    the layered app icon that actool compiles from App/AppIcon.icon,
+#                                      with light and dark appearances
+#   Contents/Resources/AppIcon.icns  the flattened fallback icon from the same compilation
 #
 # Both executables are signed with the identifier co.dododo.repossess and the same certificate,
 # so that they have the designated requirement of the command that Mattt allowed to read the device token.
@@ -47,6 +50,20 @@ assemble() {
     cp App/Info.plist "$app/Contents/Info.plist"
     plutil -replace CFBundleShortVersionString -string "$version" "$app/Contents/Info.plist"
     plutil -replace CFBundleVersion -string "$(git rev-list --count HEAD)" "$app/Contents/Info.plist"
+    local partial minos
+    partial="$(mktemp -d)"
+    minos="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' App/Info.plist)"
+    xcrun actool App/AppIcon.icon --compile "$app/Contents/Resources" \
+        --app-icon AppIcon --output-partial-info-plist "$partial/partial.plist" \
+        --minimum-deployment-target "$minos" --target-device mac --platform macosx \
+        > "$partial/actool.plist"
+    /usr/libexec/PlistBuddy -c "Delete :CFBundleIconFile" -c "Delete :CFBundleIconName" "$app/Contents/Info.plist" 2> /dev/null || true
+    /usr/libexec/PlistBuddy -c "Merge $partial/partial.plist" "$app/Contents/Info.plist"
+    rm -rf "$partial"
+    if [ ! -f "$app/Contents/Resources/Assets.car" ] || [ ! -f "$app/Contents/Resources/AppIcon.icns" ]; then
+        echo "error: actool did not produce the app icon in $app/Contents/Resources" >&2
+        exit 1
+    fi
     cp "$bin/RePossessApp" "$app/Contents/MacOS/RePossessApp"
     cp "$bin/repossess" "$app/Contents/MacOS/repossess"
     local bundle found=0

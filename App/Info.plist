@@ -6,6 +6,10 @@
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
 	<string>rePossess</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleExecutable</key>
 	<string>RePossessApp</string>
 	<key>CFBundleIdentifier</key>

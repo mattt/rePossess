@@ -1,0 +1,88 @@
+{
+  "fill" : {
+    "solid" : "srgb:0.11000,0.10000,0.09000,1.00000"
+  },
+  "groups" : [
+    {
+      "blend-mode" : "normal",
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "glass" : false,
+          "hidden" : false,
+          "image-name-specializations" : [
+            {
+              "value" : "GhostLight.png"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "GhostDark.png"
+            }
+          ],
+          "name" : "Ghost",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "lighting" : "individual",
+      "name" : "Ghost",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.25
+      },
+      "specular" : false,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    },
+    {
+      "blend-mode" : "normal",
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "glass" : false,
+          "hidden" : false,
+          "image-name-specializations" : [
+            {
+              "value" : "DeviceLight.png"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "DeviceDark.png"
+            }
+          ],
+          "name" : "Device",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "lighting" : "individual",
+      "name" : "Device",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "macOS"
+    ]
+  }
+}
