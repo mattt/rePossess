@@ -25,7 +25,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-identity="${REPOSSESS_SIGNING_IDENTITY:-Apple Development: Mattt Zmuda (S3NBB5643Q)}"
+distribution="${REPOSSESS_DISTRIBUTION:-0}"
+if [[ "$distribution" == "1" ]]; then
+    identity="${REPOSSESS_SIGNING_IDENTITY:-Developer ID Application: dododo, LLC (TTY35UM57S)}"
+else
+    identity="${REPOSSESS_SIGNING_IDENTITY:-Apple Development: Mattt Zmuda (S3NBB5643Q)}"
+fi
 identifier="co.dododo.repossess"
 folder="${REPOSSESS_APP_DIR:-build}"
 app="$folder/rePossess.app"
@@ -50,6 +55,7 @@ assemble() {
     cp App/Info.plist "$app/Contents/Info.plist"
     plutil -replace CFBundleShortVersionString -string "$version" "$app/Contents/Info.plist"
     plutil -replace CFBundleVersion -string "$(git rev-list --count HEAD)" "$app/Contents/Info.plist"
+    plutil -replace RePossessSourceRevision -string "$(git rev-parse HEAD)" "$app/Contents/Info.plist"
     local partial minos
     partial="$(mktemp -d)"
     minos="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' App/Info.plist)"
@@ -80,6 +86,11 @@ assemble() {
         echo "error: MLX's Metal library is missing from the build" >&2
         exit 1
     fi
+    cp LICENSE.md "$app/Contents/Resources/LICENSE.md"
+    cp Sources/RePossessFormat/RMScene/LICENSE-rmscene "$app/Contents/Resources/LICENSE-rmscene"
+    if [[ -d Licenses ]]; then
+        ditto Licenses "$app/Contents/Resources/Licenses"
+    fi
     echo "Assembled $app (version $version)"
 }
 
@@ -88,9 +99,17 @@ sign() {
         echo "error: $app does not exist; run \`mise run build:app\` first" >&2
         exit 1
     fi
+    local signing_args=(--timestamp=none)
+    if [[ "$distribution" == "1" ]]; then
+        if [[ "$identity" != "Developer ID Application:"* ]]; then
+            echo "error: distribution requires a Developer ID Application identity" >&2
+            exit 1
+        fi
+        signing_args=(--options runtime --timestamp)
+    fi
     # Inner code first, then the bundle, which seals it.
-    codesign --force --sign "$identity" --identifier "$identifier" --timestamp=none "$app/Contents/MacOS/repossess"
-    codesign --force --sign "$identity" --timestamp=none "$app"
+    codesign --force --sign "$identity" --identifier "$identifier" "${signing_args[@]}" "$app/Contents/MacOS/repossess"
+    codesign --force --sign "$identity" "${signing_args[@]}" "$app"
     codesign --verify --strict --deep "$app"
     local app_requirement helper_requirement
     app_requirement="$(requirement "$app")"

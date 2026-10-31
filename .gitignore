@@ -8,3 +8,6 @@ xcuserdata/
 
 # Tablet captures stay local; see AGENTS.md
 captures/
+
+# Release packages and notarization receipts.
+dist/

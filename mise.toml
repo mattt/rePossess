@@ -49,3 +49,32 @@ run = "scripts/app.sh run"
 [tasks."quit:app"]
 description = "Quit rePossess.app"
 run = "scripts/app.sh quit"
+
+[tasks."lint:shell"]
+description = "Check the app and release shell scripts"
+run = "shellcheck scripts/app.sh scripts/release.sh"
+
+[tasks."release:build"]
+description = "Build and sign the app for direct distribution"
+run = "scripts/release.sh build"
+
+[tasks."release:notarize"]
+description = "Submit the distribution app to Apple's notary service"
+run = "scripts/release.sh notarize"
+
+[tasks."release:staple"]
+description = "Staple and validate the app's notarization ticket"
+run = "scripts/release.sh staple"
+
+[tasks."release:verify"]
+description = "Verify the distribution signature, ticket, and Gatekeeper assessment"
+run = "scripts/release.sh verify"
+
+[tasks."release:package"]
+description = "Package the stapled app as a versioned ZIP with a SHA-256 checksum"
+run = "scripts/release.sh package"
+
+[tasks."release:prepare"]
+description = "Check, build, notarize, staple, and package without publishing"
+depends = ["check", "lint:shell"]
+run = "scripts/release.sh prepare"
