@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 
-/// Scores a recognizer against reference transcriptions, as spike 5 did.
+/// Scores a recognizer against reference transcriptions.
 ///
 /// The reference folder holds one text file for each strip, in subfolders such as `notebook/`,
 /// and the images folder holds the strips with the same names and `.png`,
@@ -20,7 +20,7 @@ public enum Evaluation {
         public var group: String { name.split(separator: "/").dropLast().joined(separator: "/") }
     }
 
-    /// One strip's result, in the form of spike 5's output files.
+    /// One strip's result, as an output file records it.
     public struct Output: Sendable, Codable {
         /// The image's path from the images folder, such as `notebook/p01-s01.png`.
         public var image: String
@@ -116,8 +116,8 @@ public enum Evaluation {
         return [total] + groups.keys.sorted().compactMap { groups[$0] }
     }
 
-    /// The median of the values after the first, which includes a model's load,
-    /// as spike 5 reported seconds for one strip.
+    /// The median of the values after the first, which includes a model's load:
+    /// the reported seconds for one strip.
     public static func warmMedian(_ seconds: [Double]) -> Double? {
         let warm = seconds.count > 1 ? Array(seconds.dropFirst()) : seconds
         guard !warm.isEmpty else { return nil }

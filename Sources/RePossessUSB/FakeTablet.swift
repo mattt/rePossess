@@ -5,8 +5,8 @@ import Foundation
 /// It is internal; tests reach it with `@testable import`.
 /// It serves the listing, both downloads, and the upload, and records every path it was asked for.
 /// When `hang` is set, every request times out, as the Paper Pure's interface did
-/// after a thumbnail or search request in spike 1.
-/// An upload adds a document with a new ID at the top level, as the Paper Pure did in spikes 1 and 4,
+/// after a thumbnail or search request.
+/// An upload adds a document with a new ID at the top level, as the Paper Pure does,
 /// and `uploadBehavior` can lose the answer before or after the tablet adds it.
 actor FakeTablet: USBTransport {
     /// What the next uploads do.

@@ -21,7 +21,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1"),
-        // Handwriting recognition through configurable providers (Mattt, 2026-10-25).
+        // Handwriting recognition through configurable providers.
         // Only the MLX trait: the system model and the cloud providers need no trait.
         .package(url: "https://github.com/huggingface/AnyLanguageModel.git", exact: "1.1.0", traits: ["MLX"]),
     ],

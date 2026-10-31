@@ -6,7 +6,7 @@ import Testing
 @testable import RePossessLibrary
 @testable import RePossessUSB
 
-/// A fake tablet that names an uploaded rmdoc from its metadata, as the Paper Pure did in spike 4.
+/// A fake tablet that names an uploaded rmdoc from its metadata, as the Paper Pure does.
 func uploadingTablet() async -> FakeTablet {
     let tablet = FakeTablet()
     await tablet.set(nameForUpload: { fileName, data in
@@ -343,7 +343,7 @@ func queueNote(_ library: Library, title: String = "rePossess test note") throws
         let root = FileManager.default.temporaryDirectory.appending(path: "repossess-migrate-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let database = try Database(url: root.appending(path: "library.sqlite"))
-        // The phase 1 and 2 schema, with invented rows: a scan, a handwritten notebook, and an annotated PDF.
+        // The version 1 schema, with invented rows: a scan, a handwritten notebook, and an annotated PDF.
         try database.execute(
             """
             CREATE TABLE items (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL,

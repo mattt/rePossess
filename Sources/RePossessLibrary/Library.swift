@@ -4,9 +4,8 @@ import Synchronization
 
 /// What a client must look at to read a document: text, ink, or images.
 ///
-/// Phase 2's live check found that a client looking for a handwritten notebook
-/// could not tell one from a scanned PDF, because both were `ink`;
-/// phase 3 separates ink on notebook pages, ink on PDF pages, and PDF pages without text.
+/// A client looking for a handwritten notebook cannot tell one from a scanned PDF if both are `ink`,
+/// so the status separates ink on notebook pages, ink on PDF pages, and PDF pages without text.
 public enum ContentStatus: String, Sendable, Codable {
     /// Every page has text, or has nothing to read; a page may also have some ink.
     case text
@@ -237,13 +236,13 @@ public final class Library: Sendable {
         )
     }
 
-    /// Phase 3: whether a document has typed text, the queue of pushes, and the tablet's PDF exports.
+    /// Version 2: whether a document has typed text, the queue of pushes, and the tablet's PDF exports.
     ///
     /// Until a document is indexed again, `typed_text` comes from its pages:
     /// a notebook with a page of text has typed text.
     /// A PDF with a text box on a page gets the flag at its next download.
     /// `content_status` gains `annotated` and `image` from the stored pages.
-    /// A refresh error without a time is cleared: before phase 2, a failed refresh
+    /// A refresh error without a time is cleared: in earlier builds, a failed refresh
     /// wrote its error without a time, and `status` showed it as "time unknown" after later successes.
     private func migrateToVersion2() throws {
         try database.execute(

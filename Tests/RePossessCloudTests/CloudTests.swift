@@ -182,14 +182,14 @@ enum Fixtures {
 }
 
 @Suite struct KeychainTests {
-    @Test func readsThePairedItemFirstAndFallsBackToSpike6() throws {
+    @Test func readsThePairedItemFirstAndFallsBackToTheLegacyItem() throws {
         let both = FakeKeychain(["rePossess": "new.device.token", "rePossess spike 6": "old.device.token"])
         #expect(try DeviceTokenKeychain.read(from: both) == ("new.device.token", "rePossess"))
         #expect(both.reads == ["rePossess"])
 
-        let spike = FakeKeychain(["rePossess spike 6": "old.device.token"])
-        #expect(try DeviceTokenKeychain.read(from: spike) == ("old.device.token", "rePossess spike 6"))
-        #expect(spike.reads == ["rePossess", "rePossess spike 6"])
+        let legacy = FakeKeychain(["rePossess spike 6": "old.device.token"])
+        #expect(try DeviceTokenKeychain.read(from: legacy) == ("old.device.token", "rePossess spike 6"))
+        #expect(legacy.reads == ["rePossess", "rePossess spike 6"])
 
         #expect(throws: CloudError.notPaired(service: "rePossess")) {
             try DeviceTokenKeychain.read(from: FakeKeychain())
@@ -197,10 +197,10 @@ enum Fixtures {
     }
 
     @Test func findsThePairedItemWithoutReadingASecret() {
-        let spike = FakeKeychain(["rePossess spike 6": "old.device.token"])
-        #expect(DeviceTokenKeychain.pairedService(in: spike) == "rePossess spike 6")
+        let legacy = FakeKeychain(["rePossess spike 6": "old.device.token"])
+        #expect(DeviceTokenKeychain.pairedService(in: legacy) == "rePossess spike 6")
         #expect(DeviceTokenKeychain.pairedService(in: FakeKeychain()) == nil)
-        #expect(spike.reads.isEmpty)
+        #expect(legacy.reads.isEmpty)
     }
 }
 

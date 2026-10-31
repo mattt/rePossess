@@ -7,7 +7,7 @@ import Foundation
 /// `rm-filename` on every file request (remarkable-mcp issue 101, from 2026-05-18),
 /// a bearer token on every request, a CRC-32C and a matching hash on every upload,
 /// a root index sorted by ID (ddvk/rmapi issue 75), and a root update only from the current generation.
-/// A root update keeps the schema of the root index it names, as spike 6 saw on 2026-10-25.
+/// A root update keeps the schema of the root index it names, as the cloud service did on 2026-10-25.
 /// It can add rate-limit headers, wait before it answers, fail file reads on purpose,
 /// change the generation before a root update, and lose the answer to a root update.
 actor FakeCloud: HTTPTransport {

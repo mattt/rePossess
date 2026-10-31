@@ -67,7 +67,7 @@ extension Library {
     /// and has one page for each of the document's pages.
     /// The tablet exports one PDF page for each page, in order,
     /// and a page longer than the screen as one taller PDF page
-    /// (checked on 2026-10-25 on spike 4's exports and on a handwritten notebook of 10 pages).
+    /// (checked on 2026-10-25 on exports of typed test notebooks and of a handwritten notebook of 10 pages).
     public func exportState(for item: LibraryItem) throws -> ExportState {
         let typed =
             try database.query("SELECT typed_text FROM items WHERE id = ?", [.text(item.id)]).first?.first?.int == 1

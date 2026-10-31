@@ -79,7 +79,7 @@ public struct URLSessionTransport: HTTPTransport {
         var urlRequest = URLRequest(url: request.url)
         urlRequest.httpMethod = request.method
         // Authorization is a reserved header in Foundation's documentation,
-        // but URLSession sent it unchanged in spike 6's live run (2026-10-25).
+        // but URLSession sent it unchanged in a live run on 2026-10-25.
         for (name, value) in request.headers {
             urlRequest.setValue(value, forHTTPHeaderField: name)
         }

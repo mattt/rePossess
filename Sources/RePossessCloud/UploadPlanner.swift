@@ -201,7 +201,7 @@ public struct UploadPlan: Sendable, Equatable {
 ///
 /// rmapi-js always writes the root in schema 4 (line 758).
 /// rePossess writes it in the account's schema, as the tablet does:
-/// on 2026-10-25 spike 6 wrote a schema 3 root to Mattt's schema 3 account,
+/// on 2026-10-25 a live run wrote a schema 3 root to the owner's schema 3 account,
 /// the server accepted it, and the account stayed on schema 3.
 /// A schema 4 root on a schema 3 account reportedly moves the account to schema 4 for good
 /// (ddvk/rmapi issue 56), so the planner never writes one.

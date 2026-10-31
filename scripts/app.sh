@@ -18,7 +18,7 @@
 #   Contents/Resources/AppIcon.icns  the flattened fallback icon from the same compilation
 #
 # Both executables are signed with the identifier co.dododo.repossess and the same certificate,
-# so that they have the designated requirement of the command that Mattt allowed to read the device token.
+# so that they have the designated requirement of the command that the owner allowed to read the device token.
 # The command sits in Contents/MacOS, not Contents/Helpers, because Foundation gives a program there
 # the app's bundle, and so the resource bundles in Contents/Resources.
 set -euo pipefail

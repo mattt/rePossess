@@ -5,10 +5,10 @@ import Testing
 
 private let fixtures = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "Fixtures")
 
-/// The author UUID in spike 4's `make_test_fixtures.sh`.
+/// The author UUID of the fixtures.
 private let fixtureAuthor = UUID(uuidString: "00000000-0000-4000-8000-0000000000a0")!
 
-/// The paragraphs of spike 4's `a-styles.md`, from which rmscene wrote `rmscene-a-styles.rm`.
+/// The paragraphs of `a-styles.md`, from which rmscene wrote `rmscene-a-styles.rm`.
 /// The text is invented.
 let aStyles: [StyledParagraph] = [
     StyledParagraph(.heading, "rePossess test a: styles"),

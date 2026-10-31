@@ -371,7 +371,7 @@ private struct PushSender {
         progress("Sending \"\(record.title)\" over USB.")
         do {
             // Listing the top level just before the upload makes it the folder that the interface
-            // last listed, which one source says is where an upload goes (unchecked; spike 1 saw the top level).
+            // last listed, which one source says is where an upload goes (unchecked; tests saw the top level).
             let before = try await client.list()
             let names = record.kind == .notebook ? [record.title] : upload.expectedNames
             record.preexisting = before.filter { names.contains($0.visibleName) }.map(\.id)

@@ -29,7 +29,7 @@ extension StripRecognizer {
 }
 
 /// A recognizer that asks a language model from AnyLanguageModel, one new session for each strip,
-/// with spike 5's prompt and greedy decoding where the provider allows it.
+/// with the recognition prompt and greedy decoding where the provider allows it.
 public struct LanguageModelStripRecognizer<Model: LanguageModel>: StripRecognizer {
     public let model: Model
     let release: @Sendable () async -> Void

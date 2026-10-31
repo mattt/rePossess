@@ -40,7 +40,7 @@ public enum ZipError: Error, Equatable, CustomStringConvertible {
 /// Reads the files of a zip archive, such as an rmdoc download.
 ///
 /// The tablet's exports deflate every entry (checked on 2026-10-25 with
-/// the Paper Pure, software 3.29.0.153); spike 4's writer stores them.
+/// the Paper Pure, software 3.29.0.153); the notebook writer stores them.
 /// This reads both, from the central directory, and checks each file's CRC-32.
 /// It refuses absolute paths and `..` components, because the library unpacks archives to disk.
 public func readZip(_ data: Data) throws -> [ArchiveFile] {
@@ -143,7 +143,7 @@ func inflate(_ data: Data, size: Int, name: String) throws -> Data {
 }
 
 /// A zip archive with stored entries, no directory entries, and no extra fields,
-/// as spike 4's notebook writer makes them.
+/// as the notebook writer makes them.
 func storedZip(_ files: [ArchiveFile], modified: Date) -> Data {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(identifier: "UTC")!

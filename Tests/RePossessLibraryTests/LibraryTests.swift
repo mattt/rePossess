@@ -232,7 +232,7 @@ func temporaryLibrary() throws -> Library {
         #expect(try library.status().lastError[.cloud] == "invented failure")
         try library.setState(["cloud.last_refresh": "200"])
         #expect(try library.status().lastError[.cloud] == nil)
-        // An error from before phase 2 has no time, and shows until a success clears it.
+        // An error from an earlier build has no time, and shows until a success clears it.
         try library.setState(["usb.last_error": "older failure"])
         #expect(try library.status().lastError[.usb] == "older failure")
         #expect(try library.status().lastErrorAt[.usb] == nil)
@@ -519,7 +519,7 @@ actor Waits {
         _ = try await library.refreshUSB(client: USBClient(transport: tablet, checkInterface: { true }), exports: false)
         #expect(try library.pages(of: id)[0].markdown.hasSuffix("[Image: see fetch_page_image for page 1.]"))
 
-        // As phase 5 left it: a warning for the image blocks, Markdown in the search text, and version 3.
+        // As an earlier build left it: a warning for the image blocks, Markdown in the search text, and version 3.
         _ = try library.database.query(
             #"UPDATE pages SET warnings = '["Block type 14 at byte 296: Unknown block type 14. Skipping 192 bytes."]', markdown = '# Invented heading\n\nThen a table:'"#
         )

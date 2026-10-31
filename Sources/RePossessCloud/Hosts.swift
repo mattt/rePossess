@@ -23,7 +23,7 @@ public enum CloudHosts {
     /// (rmfakecloud `internal/app/claims.go`, read for behavior only).
     /// Mapping the claim to `https://<claim>.tectonic.remarkable.com`
     /// comes from the host template `{}.tectonic.remarkable.com` reported in ddvk/rmapi issue 66;
-    /// spike 6's live run checked it for the claim `eu` on 2026-10-25.
+    /// a live run checked it for the claim `eu` on 2026-10-25.
     /// Without a usable claim, this returns ``defaultSync``.
     public static func sync(for claims: TokenClaims?) -> URL {
         guard let region = claims?.tectonic, isRegionLabel(region) else {

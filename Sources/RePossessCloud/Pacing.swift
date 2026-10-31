@@ -50,7 +50,7 @@ public struct TransportUsage: Sendable, Equatable {
 
 /// The rate-limit headers of a response.
 ///
-/// Spike 6's live run on 2026-10-25 saw `x-ratelimit-limit`, `x-ratelimit-remaining`,
+/// On 2026-10-25 the cloud service sent `x-ratelimit-limit`, `x-ratelimit-remaining`,
 /// and `x-ratelimit-reset` on every response: for file reads 48000, 95998, and 1;
 /// for the root 30, 29, and 2; and for user tokens 5, 2 to 4, and 12 to 26.
 /// That the reset is in seconds is an inference from those values.

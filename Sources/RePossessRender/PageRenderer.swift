@@ -50,7 +50,7 @@ public struct PlacedImage {
 /// A stroke group anchored to a character of the text moves with that character's line:
 /// its y origin is the baseline of the line, and its x origin is the group's `anchor_origin_x`
 /// from the center (checked on 2026-10-25 against the Paper Pure's PDF export of a circle
-/// that Mattt drew around a typed paragraph).
+/// drawn around a typed paragraph).
 public struct PageScene {
     /// The page width in pixels.
     public var width: CGFloat

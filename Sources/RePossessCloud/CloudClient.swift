@@ -276,7 +276,7 @@ public actor CloudSession {
         let device = try await readDeviceToken()
         let token = try await CloudAuth(transport: transport).renewUserToken(deviceToken: device)
         userToken = token
-        // Without an `exp` claim, renew after an hour; the live service hinted 3 hours (spike 6).
+        // Without an `exp` claim, renew after an hour; the cloud service hinted 3 hours.
         expiry = (try? TokenClaims(jwt: token))?.expiration ?? Date().addingTimeInterval(3600)
         return CloudClient(transport: transport, userToken: token, syncHost: syncHost)
     }

@@ -50,7 +50,7 @@ func writableTools(
     )
 }
 
-/// A fake tablet that names an uploaded rmdoc from its metadata, as the Paper Pure did in spike 4.
+/// A fake tablet that names an uploaded rmdoc from its metadata, as the Paper Pure does.
 func namingTablet() async -> FakeTablet {
     let tablet = FakeTablet()
     await tablet.set(nameForUpload: { fileName, data in
@@ -248,7 +248,7 @@ func namingTablet() async -> FakeTablet {
 }
 
 @Suite struct ContentStatusTests {
-    /// Phase 2's live check: a client looking for a handwritten notebook opened a printed PDF page,
+    /// In a live check, a client looking for a handwritten notebook opened a printed PDF page,
     /// because every document's kind was DocumentType and scans and notebooks were both `ink`.
     @Test func listsTellNotebooksFromPDFsAndInkFromScans() async throws {
         let tablet = FakeTablet()

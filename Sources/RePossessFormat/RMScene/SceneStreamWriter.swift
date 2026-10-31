@@ -4,7 +4,7 @@
 // rmscene is Copyright (c) 2023 Rick Lupton and is MIT licensed;
 // see LICENSE-rmscene in this directory.
 //
-// Added for spike 4 (notebook writer), with lines and glyph ranges added in phase 1
+// Added for the notebook writer, with lines and glyph ranges added
 // so that tests can make pages with strokes and highlights.
 // It writes what rmscene writes when no "version" option is given,
 // which is the newest form of each block.

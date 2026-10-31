@@ -80,7 +80,7 @@ public struct RecognitionCounts: Sendable, Equatable {
 }
 
 extension Library {
-    /// Phase 4: each page's stroke hash, the cache of recognized handwriting,
+    /// Version 3: each page's stroke hash, the cache of recognized handwriting,
     /// and a `kind` column in the search table, which tells typed text from handwriting.
     ///
     /// FTS5 cannot add a column, so the search table is made again from the stored pages.

@@ -5,8 +5,8 @@ import RePossessFormat
 
 /// The tablet's text metrics for one paragraph style, in page pixels.
 ///
-/// Measured on 2026-10-25 from the PDF exports that Mattt's Paper Pure (software 3.29.0.153)
-/// made of spike 4's invented test notebooks, at 72/227 points per pixel:
+/// Measured on 2026-10-25 from the PDF exports that the owner's Paper Pure (software 3.29.0.153)
+/// made of invented test notebooks, at 72/227 points per pixel:
 /// body text is 32 px with a line pitch of 45.5 px, Subheading 36 px, Title 64 px in a serif face,
 /// and bullets and checkboxes indent 48 px for each level.
 /// The vertical model puts each paragraph's first baseline `ascent` below its top,
@@ -14,7 +14,7 @@ import RePossessFormat
 /// It reproduces every measured baseline-to-baseline distance:
 /// body to body 69.5, body to Subheading 89.3, Subheading to body 63.3, and Title to body 70.4.
 /// A Title's wrapped lines step 76.0 px, and a Title after another paragraph has a gap of 88.0 px
-/// above it (measured on Mattt's own typed pages; Body to Title steps 163.1 px, Title to Title 164.0).
+/// above it (measured on typed pages from the tablet; Body to Title steps 163.1 px, Title to Title 164.0).
 /// The Subheading's wrapped-line pitch is a guess, scaled from the body's, because no sample wraps one.
 public struct StyleMetrics: Sendable {
     public var fontName: String
@@ -127,14 +127,14 @@ public struct TextLayout {
 
     /// The inset of the text on each side of its block.
     /// The first character of each line starts 4 px inside the block,
-    /// and the widest body line in spike 4's exports was 927.2 px of the 936 px block.
+    /// and the widest body line in those exports was 927.2 px of the 936 px block.
     public static let inset: CGFloat = 4
 
     /// How much wider reMarkable Sans sets text than Helvetica Neue, on average.
-    /// On 288 body lines of spike 4's long note, the tablet's lines were 0.65 percent wider
+    /// On 288 body lines of a long test note, the tablet's lines were 0.65 percent wider
     /// (standard deviation 0.5 percent), so lines wrap as if the column were that much narrower.
     /// With this and the 4 px insets, 663 of the 726 lines on 15 pages that the tablet exported
-    /// from spike 4's notebooks break where the tablet breaks them;
+    /// from the test notebooks break where the tablet breaks them;
     /// the rest differ by a word near the right edge.
     public static let widthCorrection: CGFloat = 1.0065
 

@@ -2,11 +2,11 @@ import Foundation
 
 /// The routes of the tablet's USB web interface that rePossess uses.
 ///
-/// On Mattt's Paper Pure (software 3.29.0.153), the listing and both downloads work,
+/// On the owner's Paper Pure (software 3.29.0.153), the listing and both downloads work,
 /// but `GET /thumbnail/<id>` and `POST /search/<keyword>` hang the interface
-/// until the setting is switched off and on (spike 1, 2026-10-25).
+/// until the setting is switched off and on (checked on 2026-10-25).
 /// So this type has no case for them, and the client can send nothing else.
-/// Phase 3 adds the upload, which spikes 1 and 4 used on 2026-10-25.
+/// The upload worked on the tablet on 2026-10-25.
 public enum USBRoute: Sendable, Equatable, CustomStringConvertible {
     /// `GET /documents/` for the top level, or `GET /documents/<folder-id>`.
     case documents(folder: String?)
@@ -42,7 +42,7 @@ public enum USBRoute: Sendable, Equatable, CustomStringConvertible {
 ///
 /// The listing's keys are `ID`, `Type`, `fileType`, `ModifiedClient`, `Parent`,
 /// `Bookmarked`, `CurrentPage`, and the name twice, as `VisibleName`
-/// and the misspelled `VissibleName` (spike 1).
+/// and the misspelled `VissibleName`.
 public struct USBItem: Sendable, Equatable, Decodable {
     public var id: String
     /// `DocumentType` or `CollectionType`.
@@ -224,7 +224,7 @@ public struct URLSessionUSBTransport: USBTransport {
 ///
 /// It sends one request at a time, with short timeouts,
 /// and after any timeout it sends nothing more, because the interface may be hung
-/// and only switching the setting off and on clears it (spike 1).
+/// and only switching the setting off and on clears it.
 /// Make a new client for each refresh.
 public actor USBClient {
     /// The tablet's address on its USB network.
@@ -245,10 +245,10 @@ public actor USBClient {
     public private(set) var requested: [USBRoute] = []
 
     /// - Parameters:
-    ///   - listTimeout: Seconds for a folder listing, which took 13 ms in spike 1.
+    ///   - listTimeout: Seconds for a folder listing, which took 13 ms on the tablet.
     ///   - downloadTimeout: Seconds for an rmdoc download; a 7.2 MB archive took under 1.5 s.
     ///   - pdfTimeout: Seconds for a PDF that the tablet renders; 10 pages took 5.3 s.
-    ///   - uploadTimeout: Seconds for an upload; uploads of up to 29 KB took 0.03 to 0.25 s in spikes 1 and 4.
+    ///   - uploadTimeout: Seconds for an upload; uploads of up to 29 KB took 0.03 to 0.25 s on the tablet.
     ///   - checkInterface: Whether the Mac is on the tablet's USB network.
     ///   - wait: Waits before a request is sent again after ``USBError/localNetworkDenied``.
     public init(
@@ -277,7 +277,7 @@ public actor USBClient {
         do {
             return try JSONDecoder().decode([USBItem].self, from: data)
         } catch {
-            // The interface labels its JSON ISO-8859-1 (spike 1); try that if UTF-8 fails.
+            // The interface labels its JSON ISO-8859-1; try that if UTF-8 fails.
             if let text = String(data: data, encoding: .isoLatin1),
                 let items = try? JSONDecoder().decode([USBItem].self, from: Data(text.utf8))
             {
@@ -315,11 +315,11 @@ public actor USBClient {
 
     /// Uploads one file, which the tablet adds as a new document at the top level.
     ///
-    /// The answer has no document ID: the tablet assigns new document and page IDs
-    /// (spikes 1 and 4), so a caller finds the document by listing the folder.
-    /// Spike 1 saw HTTP 201 and `{"status":"Upload successful"}`,
+    /// The answer has no document ID: the tablet assigns new document and page IDs,
+    /// so a caller finds the document by listing the folder.
+    /// The tablet answered HTTP 201 and `{"status":"Upload successful"}`,
     /// and a PDF named `repossess-test.pdf` became a document named "repossess-test".
-    /// An rmdoc takes the name in its `.metadata` instead (spike 4).
+    /// An rmdoc takes the name in its `.metadata` instead.
     public func upload(_ file: USBUpload) async throws {
         let (body, contentType) = file.multipart()
         _ = try await send(.upload, timeout: uploadTimeout, body: body, contentType: contentType)
@@ -385,8 +385,8 @@ public struct USBUpload: Sendable, Equatable {
     public enum Kind: String, Sendable, Equatable {
         case pdf, epub, rmdoc
 
-        /// The part's content type. curl sent `application/pdf` for spike 1's PDF
-        /// and `application/octet-stream` for spike 4's rmdoc files, and the tablet accepted both.
+        /// The part's content type. curl sent `application/pdf` for a test PDF
+        /// and `application/octet-stream` for test rmdoc files, and the tablet accepted both.
         /// `application/epub+zip` for EPUB is unchecked.
         public var contentType: String {
             switch self {
@@ -417,7 +417,7 @@ public struct USBUpload: Sendable, Equatable {
     public var fileName: String { "\(fileStem).\(kind.rawValue)" }
 
     /// The name that the tablet gives a PDF or an EPUB: the file name without its extension
-    /// (checked for one PDF with an ASCII name in spike 1).
+    /// (checked for one PDF with an ASCII name).
     public var fileStem: String {
         String(
             String.UnicodeScalarView(
@@ -448,7 +448,7 @@ public struct USBUpload: Sendable, Equatable {
 public enum USBNetwork {
     /// Whether any network interface has an IPv4 address in `10.11.99.0/24`,
     /// the network that the tablet makes over USB.
-    /// The Mac's address on it changes (spike 1 saw `10.11.99.11` and `10.11.99.2`),
+    /// The Mac's address on it changes (checks saw `10.11.99.11` and `10.11.99.2`),
     /// so this checks the network, not one address.
     @Sendable public static func isPresent() -> Bool {
         var list: UnsafeMutablePointer<ifaddrs>?

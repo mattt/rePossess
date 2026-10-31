@@ -1,6 +1,6 @@
 import Foundation
 
-/// Word and character error rates and word recall, by spike 5's rules (`score.py`).
+/// Word and character error rates and word recall.
 ///
 /// Text is normalized before scoring: lowercase, "&" read as "and",
 /// the `[[ ]]` marks of uncertain reference words removed,

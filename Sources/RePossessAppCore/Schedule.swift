@@ -5,8 +5,8 @@ import Foundation
 /// The default is every 15 minutes.
 /// A cloud refresh whose root has not changed costs one request, and one more when the user token
 /// is renewed, which the app's session does about once an hour.
-/// Spike 6 saw rate-limit values of 30, 29, and 2 for the root, and 5, 2 to 4, and 12 to 26
-/// for user tokens (phase 2), so four refreshes an hour stay far inside both
+/// On 2026-10-25 the cloud service returned rate-limit values of 30, 29, and 2 for the root,
+/// and 5, 2 to 4, and 12 to 26 for user tokens, so four refreshes an hour stay far inside both
 /// (an inference: how the server counts its window is unchecked).
 /// reMarkdown's index lags the tablet by about 10 minutes;
 /// 15 minutes keeps a new note on the Mac within a similar time.

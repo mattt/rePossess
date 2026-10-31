@@ -3,7 +3,7 @@ import RePossessLibrary
 
 /// The recognizers that rePossess can use, through AnyLanguageModel or through the MCP client.
 public enum RecognizerProvider: String, Sendable, Codable, CaseIterable {
-    /// Qwen3-VL 8B 4-bit through MLX, on this Mac: the pinned model of spike 5.
+    /// Qwen3-VL 8B 4-bit through MLX, on this Mac: the pinned model.
     case mlx
     /// The Foundation Models on-device model, with permissive guardrails, on this Mac.
     case foundationModels = "foundation-models"

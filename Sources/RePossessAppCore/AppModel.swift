@@ -454,7 +454,7 @@ public final class AppModel {
     public var modelStore: ModelStore { ModelStore(libraryRoot: options.libraryRoot) }
 
     /// Downloads the pinned model from Hugging Face and checks its hashes.
-    /// Only the owner's click in the settings starts it (Mattt, 2026-10-25).
+    /// Only the owner's click in the settings starts it.
     public func startModelDownload() {
         guard download == nil else { return }
         let store = modelStore

@@ -14,7 +14,7 @@ public struct Strip: @unchecked Sendable {
     public var image: CGImage
 }
 
-/// Cuts pages into strips as spike 5 did (`hw-strips`).
+/// Cuts pages into strips.
 ///
 /// The page renders at one tablet pixel per pixel, with only its strokes.
 /// Each strip is at most one screen tall (1,872 rows),
@@ -24,7 +24,7 @@ public struct Strip: @unchecked Sendable {
 public enum StripCutter {
     /// One screen of the Paper Pure: the most rows in one strip.
     public static let maxHeight = 1872
-    /// The longest side of a strip as the recognizer gets it, in pixels (spike 5's 936).
+    /// The longest side of a strip as the recognizer gets it, in pixels.
     public static let maxSide = 936
     /// A gray value below this is ink.
     static let inkThreshold: UInt8 = 160

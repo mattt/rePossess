@@ -5,7 +5,7 @@ import Foundation
 /// and highlights.
 ///
 /// It follows the block layout of rmscene's `simple_text_document`
-/// and of the tablet's pages that spikes 3 and 4 read.
+/// and of pages read from the tablet.
 /// It is internal; tests reach it with `@testable import`.
 struct PageBuilder {
     /// A group of strokes, optionally anchored to a character of the text.

@@ -3,7 +3,7 @@
 // rmscene is Copyright (c) 2023 Rick Lupton and is MIT licensed;
 // see LICENSE-rmscene in this directory.
 //
-// Added for spike 4 (notebook writer).
+// Added for the notebook writer.
 
 import Foundation
 

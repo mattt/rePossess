@@ -23,9 +23,9 @@ public struct PinnedModel: Sendable {
         URL(string: "https://huggingface.co/\(repository)/resolve/\(revision)/\(file.name)")!
     }
 
-    /// Spike 5's default: Qwen3-VL 8B Instruct in a 4-bit MLX quantization.
+    /// The default model: Qwen3-VL 8B Instruct in a 4-bit MLX quantization.
     ///
-    /// The hashes were read on 2026-10-25 from the copy that spike 5 downloaded with `hf download`.
+    /// The hashes were read on 2026-10-25 from a copy downloaded with `hf download`.
     /// The three large files' SHA-256 values are the names of their blobs in the Hugging Face cache,
     /// which are the repository's LFS object IDs,
     /// and every other file's git blob ID matched its blob name.

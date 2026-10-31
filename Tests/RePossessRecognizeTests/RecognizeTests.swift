@@ -438,7 +438,7 @@ final class FakeFetcher: RangeFetcher, @unchecked Sendable {
         )
     }
 
-    @Test func thePinnedModelIsSpikeFivesRevision() {
+    @Test func thePinnedModelNamesItsRevisionAndSize() {
         let pinned = PinnedModel.qwen3VL8B
         #expect(pinned.repository == "mlx-community/Qwen3-VL-8B-Instruct-4bit")
         #expect(pinned.revision == "defcdea7cc7a4b0858fea563cbbce171d328e457")

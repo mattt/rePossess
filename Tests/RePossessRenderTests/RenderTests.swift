@@ -29,7 +29,7 @@ private func pixel(_ png: Data, x: Int, y: Int) -> (r: UInt8, g: UInt8, b: UInt8
 }
 
 @Suite struct TextLayoutTests {
-    /// The baselines that the Paper Pure's PDF export gave for spike 4's test notebook,
+    /// The baselines that the Paper Pure's PDF export gave for a test notebook,
     /// for paragraphs that do not wrap: Title, Body, Subheading, Body, bullets, and a checkbox.
     @Test func paragraphSpacingMatchesTheTablet() throws {
         var page = PageBuilder()

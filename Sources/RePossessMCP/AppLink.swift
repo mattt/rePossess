@@ -68,7 +68,7 @@ public enum AppLinkError: Error, CustomStringConvertible, Equatable {
 /// XPC between two unrelated processes needs a Mach service that launchd registers,
 /// such as a launch agent. A connection to the socket succeeds only while the app listens,
 /// so it also tells the helper whether the app is running; it carries the report back;
-/// and it is local to one library. No sandbox is in the way (phase 5, decision 5).
+/// and it is local to one library. No sandbox is in the way.
 public struct AppLink: Sendable {
     /// The socket's path.
     public let path: String

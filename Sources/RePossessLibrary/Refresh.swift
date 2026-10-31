@@ -136,8 +136,8 @@ extension Library {
         try await withRefreshLock {
             let start = Date()
             var report = RefreshReport(source: .usb)
-            // Phase 1 built this state with `compactMapValues`, which kept a `nil` as `.some(nil)`
-            // and so wrote NULL over the time of the last success whenever a refresh failed.
+            // `compactMapValues` would keep a `nil` here as `.some(nil)`
+            // and so write NULL over the time of the last success whenever a refresh failed.
             let finish: (String?) -> Void = { error in
                 if let error {
                     try? self.recordRefreshFailure(.usb, error)

@@ -10,7 +10,7 @@ public enum ItemKind: String, Sendable, Codable {
 
 /// The fields of a `<id>.metadata` file that rePossess uses.
 ///
-/// The keys are those of the tablet's own files, as spikes 2 and 4 recorded them.
+/// The keys are those of the tablet's own files.
 /// Unknown keys are ignored, and every field has a fallback,
 /// so that a new key or a missing one does not fail the document.
 public struct DocumentMetadata: Sendable, Equatable {

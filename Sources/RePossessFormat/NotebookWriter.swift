@@ -1,4 +1,4 @@
-// The notebook writer from spike 4. `MarkdownNotebook` in Markdown.swift is its public entry point;
+// The notebook writer. `MarkdownNotebook` in Markdown.swift is its public entry point;
 // tests also use it to make fixtures.
 //
 // `textPageBlocks` generalizes rmscene's `simple_text_document` (scene_stream.py)
@@ -87,7 +87,7 @@ func textPageBlocks(_ paragraphs: [StyledParagraph], authorUUID: UUID) -> [any W
 /// How to split paragraphs into pages.
 enum PageLayout: String, Sendable {
     /// All paragraphs on one page, which the tablet grows downward to fit
-    /// (checked on 2026-10-25 with spike 4's file b1).
+    /// (checked on 2026-10-25 with a long test note).
     case single
     /// A new page at each `##` heading, unless the current page has only headings.
     case sections

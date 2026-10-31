@@ -19,18 +19,18 @@ public protocol DeviceTokenStore: Sendable {
 /// The device token's Keychain items, and the order in which rePossess reads them.
 ///
 /// `repossess pair` stores the token under ``service``.
-/// Spike 6 stored the token that phase 1 used under ``spikeService``;
-/// reading falls back to it, so that the pairing from 2026-10-25 keeps working.
+/// Earlier builds stored the token under ``legacyService``;
+/// reading falls back to it, so that an existing pairing keeps working.
 /// This is the only place that names the items.
 public enum DeviceTokenKeychain {
     /// The service name of the item that `repossess pair` creates.
     public static let service = "rePossess"
-    /// The service name of the item that spike 6 created.
-    public static let spikeService = "rePossess spike 6"
+    /// The service name of the item that earlier builds created.
+    public static let legacyService = "rePossess spike 6"
     /// The account name of both items.
     public static let account = "reMarkable device token"
     /// The services to read, in order.
-    public static let services = [service, spikeService]
+    public static let services = [service, legacyService]
 
     /// Reads the device token from the first item that exists, with the item's service name.
     ///

@@ -19,7 +19,7 @@ public struct RootState: Sendable, Equatable, Codable {
 /// Builds the requests of the sync protocol as plain values.
 ///
 /// It registers the device, renews the user token, reads the root, downloads blobs,
-/// and, from phase 3, uploads blobs and updates the root, as spike 6 did.
+/// uploads blobs, and updates the root.
 /// Each method cites the rmapi-js line it follows (commit 824f0ad).
 public struct RequestBuilder: Sendable {
     /// The host for tokens.
@@ -123,7 +123,7 @@ public struct RequestBuilder: Sendable {
     /// The response has the new hash and generation.
     /// The `rm-filename: roothash` header follows remarkable-mcp (`remarkable_mcp/sync.py`)
     /// and the behavior of ddvk/rmapi (`api/sync15/blobstorage.go`); rmapi-js omits it.
-    /// Spike 6 sent this request once, live, on 2026-10-25, and the server answered 200.
+    /// A live run sent this request once on 2026-10-25, and the server answered 200.
     public func putRoot(hash: String, generation: Int64, broadcast: Bool = true, userToken: String) throws
         -> HTTPRequest
     {

@@ -1,8 +1,8 @@
 import Foundation
 
-/// The prompt from spike 5, and the version that the cache keys name.
+/// The recognition prompt, and the version that the cache keys name.
 public enum RecognitionPrompt {
-    /// The prompt that spike 5 sent with each strip (`mlx_ocr.py` and `hw-fm`).
+    /// The prompt sent with each strip.
     public static let text = """
         Transcribe the handwritten text in this image exactly as written, line by line, \
         from top to bottom. Keep the writer's words and spelling. \
@@ -14,14 +14,14 @@ public enum RecognitionPrompt {
     /// Change it when any of them changes, so that cached text from the old rules is not shown.
     public static let version = "spike5-1872-936"
 
-    /// The most tokens that one strip's answer may take, as in spike 5.
+    /// The most tokens that one strip's answer may take.
     public static let maximumResponseTokens = 1024
 }
 
 /// Finds refusals that a model returns as text instead of an error.
 ///
 /// Foundation Models with permissive guardrails "may still sometimes refuse",
-/// and then it writes the refusal as its answer (spike 5).
+/// and then it writes the refusal as its answer.
 /// A refusal is short and starts with an apology or a statement that the model cannot help;
 /// handwriting that happens to contain "sorry" or "cannot" is longer or starts otherwise.
 public enum RefusalDetector {

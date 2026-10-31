@@ -44,7 +44,7 @@ public struct RefreshPaths: Sendable, Equatable {
 /// The kind of error that stopped a refresh, for the app's retries.
 public enum RefreshFailureKind: Sendable, Equatable {
     /// The Mac could not reach the network: offline, no route, or no answer in time,
-    /// as at login before Wi-Fi connects (Mattt's first run, 2026-10-25).
+    /// as at login before Wi-Fi connects.
     case network
     /// The cloud or the tablet refused the request with HTTP 4xx, which a retry does not change.
     case refused

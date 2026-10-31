@@ -189,15 +189,15 @@ public enum NotebookError: Error, Equatable, CustomStringConvertible {
 /// The text maps to the tablet's paragraph styles as ``parseMarkdown(_:)`` describes.
 /// Without pagination, all the text goes on one page,
 /// which the tablet grows downward to fit:
-/// spike 4's note of about 3,300 words exported from the tablet as one page 5,651 points tall.
+/// a test note of about 3,300 words exported from the tablet as one page 5,651 points tall.
 /// With pagination, a new page starts at each `##` heading.
 public struct MarkdownNotebook: Sendable {
     /// The longest title, in characters.
     public static let maxTitleLength = 200
     /// The longest Markdown, in characters.
-    /// The longest note checked on the tablet had about 18,000 characters on one page (spike 4).
+    /// The longest note checked on the tablet had about 18,000 characters on one page.
     public static let maxMarkdownLength = 100_000
-    /// The most pages. The tablet opened 11 pages in spike 4;
+    /// The most pages. The tablet opened a test notebook of 11 pages;
     /// the page order keys past the 11th are unchecked on the tablet.
     public static let maxPages = 200
 

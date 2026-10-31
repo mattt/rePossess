@@ -5,7 +5,7 @@ import RePossessRecognize
 ///
 /// The app runs the bundled `repossess recognize`, which reads the pages with strokes that the cache lacks
 /// with the configured recognizer and exits.
-/// A separate process keeps the MLX model's memory, about 7.8 GB in phase 4, out of the menu bar app,
+/// A separate process keeps the MLX model's memory, about 7.8 GB in a measured run, out of the menu bar app,
 /// and returns it when the run ends; a crash in a provider cannot stop the app.
 /// Reads do not wait for it: `fetch_document` returns cached text and markers,
 /// and the recognizer writes each page's result in its own short transaction.
