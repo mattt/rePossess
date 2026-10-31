@@ -15,8 +15,7 @@ public enum RefreshSource: String, Sendable {
     case cloud
 }
 
-/// The tools, with the schemas and rules of the design's "MCP tools" section (spike 7):
-/// the read tools, from phase 3 `push_markdown` and `push_file`, and from phase 4 `recognize_pages`.
+/// MCP tools for reading documents, adding new documents, and recognizing handwriting.
 ///
 /// - Pages are numbered from 1 in every tool.
 /// - A result with `structuredContent` has the same JSON as its only text;

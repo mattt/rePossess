@@ -1,12 +1,8 @@
-// The Markdown subset from spike 4 (spikes/04-notebook-writer/Sources/Notebook/Markdown.swift).
-// Phase 3 keeps one rule for code blocks and tables: each line becomes a Body paragraph,
-// which is what the tablet showed for spike 4's file c on 2026-10-25.
-
 import Foundation
 
 /// Maps a small subset of Markdown to tablet paragraphs.
 ///
-/// The rules follow reMarkdown's `push_markdown` and the design's Markdown table:
+/// Supported formatting:
 ///
 /// - `#` becomes Title (rmscene's HEADING); `##` to `######` become Subheading (BOLD).
 /// - A paragraph becomes one Body (PLAIN) paragraph; its lines are joined with spaces.

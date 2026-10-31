@@ -3,7 +3,7 @@ import Testing
 
 @testable import RePossessFormat
 
-/// The three places where rePossess departs from rmscene 0.8.0 (docs/design.md, Format).
+/// Checks unknown tool values, block boundaries, and partial-page recovery.
 @Suite struct DepartureTests {
     private func lines(_ result: PageReadResult) throws -> [Line] {
         var lines: [Line] = []

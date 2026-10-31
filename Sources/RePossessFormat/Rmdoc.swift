@@ -4,8 +4,7 @@ import Foundation
 ///
 /// It holds `<id>.content`, `<id>.metadata`, an optional `<id>.pagedata`,
 /// an optional `<id>.pdf` or `<id>.epub`, and `<id>/<page-id>.rm` for each page with marks,
-/// sometimes with `<id>/<page-id>-metadata.json` and image files
-/// (spike 2, `spikes/02-rmdoc-anatomy/RESULT.md`).
+/// sometimes with `<id>/<page-id>-metadata.json` and image files.
 public struct RmdocArchive: Sendable {
     /// The files, as named in the archive.
     public var files: [ArchiveFile]
