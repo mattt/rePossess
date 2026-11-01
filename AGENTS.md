@@ -43,8 +43,7 @@ Read [README.md](README.md) for scope, setup, limitations, and release instructi
 
 ## Rules
 
-- This repository is private for now (Mattt, 2026-10-24),
-  but write it as if it may become public.
+- This repository is public (since 2026-10-31).
   Never commit secrets, tokens, device keys, or real tablet content.
   Test fixtures are made for the purpose, with invented text and IDs.
 - rePossess sends the owner's data only to the tablet and reMarkable's cloud,

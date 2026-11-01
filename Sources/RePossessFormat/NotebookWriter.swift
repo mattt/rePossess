@@ -115,8 +115,7 @@ func layOutPages(_ paragraphs: [StyledParagraph], _ layout: PageLayout) -> [[Sty
 ///
 /// The archive layout and the `.content` and `.metadata` fields follow
 /// a notebook exported by a reMarkable 2 (in remarquee's test data),
-/// remarquee's notebook compiler, and rmapi-js's schema;
-/// see RESULT.md for the sources.
+/// remarquee's notebook compiler, and rmapi-js's schema.
 struct Notebook: Sendable {
     var documentId: String
     var visibleName: String
