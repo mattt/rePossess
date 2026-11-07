@@ -1,0 +1,47 @@
+name: CI
+
+on:
+    push:
+        branches: ["main"]
+    pull_request:
+        branches: ["main"]
+
+permissions:
+    contents: read
+
+jobs:
+    check:
+        name: Lint, build, and test on macOS 27 with Xcode 27.0
+        runs-on: xcode-27
+        env:
+            DEVELOPER_DIR: "/Applications/Xcode_27.0.app/Contents/Developer"
+        timeout-minutes: 20
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v6
+
+            # Key the cache on the exact Xcode build,
+            # so a runner image update can't restore build files
+            # compiled against an older toolchain.
+            - name: Read Xcode build number
+              id: xcode
+              run: echo "build=$(xcodebuild -version | awk '/Build version/ {print $3}')" >> "${GITHUB_OUTPUT}"
+
+            - name: Cache SwiftPM build artifacts
+              uses: actions/cache@v5
+              with:
+                  path: |
+                      .build
+                      ~/Library/Caches/org.swift.swiftpm
+                  key: ${{ runner.os }}-xcode-${{ steps.xcode.outputs.build }}-spm-${{ hashFiles('Package.resolved') }}
+                  restore-keys: |
+                      ${{ runner.os }}-xcode-${{ steps.xcode.outputs.build }}-spm-
+
+            - name: Lint
+              run: swift format lint --strict --recursive Package.swift Sources Tests
+
+            - name: Build
+              run: swift build
+
+            - name: Test
+              run: swift test
