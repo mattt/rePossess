@@ -28,12 +28,15 @@ let usage = """
       push-file <path | https-url> [--title <title>] [--folder <name>] [--usb | --cloud]
                                   Send a PDF or EPUB.
                                   --folder puts the new document in the top-level folder with exactly that
-                                  name, creates the folder if none has it, and refuses if two do. It goes
-                                  through the cloud only, because the USB web interface cannot choose or make
-                                  a folder; without the cloud it waits in the queue. It never renames,
+                                  name, creates the folder if no folder has the name in any case, and
+                                  refuses if two have the exact name or the only match differs in case.
+                                  It goes through the cloud only, because the USB web interface cannot
+                                  choose or make a folder, so --usb with --folder is a usage error;
+                                  without the cloud it waits in the queue. It never renames,
                                   moves, or deletes a folder or a document. Without it, the document goes
                                   at the top level.
-      pushes                      List the queue of pushes and what happened to each.
+      pushes                      List the queue of pushes and what happened to each: ID, status, path, kind,
+                                  created, tablet ID, title, folder (- for none), and the last error.
       drop-push <id>              Remove a push that has not been sent.
 
     Commands for handwriting (off until you set a recognizer):
@@ -137,6 +140,12 @@ func pushPaths(_ arguments: Arguments, session: CloudSession) throws -> @Sendabl
     let usb = arguments.flags.contains("--usb")
     let cloud = arguments.flags.contains("--cloud")
     guard !(usb && cloud) else { throw UsageError("give --usb or --cloud, not both") }
+    guard !(usb && arguments.options["--folder"] != nil) else {
+        throw UsageError(
+            "--folder needs reMarkable's cloud, because the USB web interface cannot choose or make a folder; "
+                + "use --cloud, or leave out --usb"
+        )
+    }
     if usb {
         guard USBNetwork.isPresent() else { throw UsageError("the tablet is not connected by USB") }
         return { PushPaths(usb: { USBClient() }, cloud: nil) }
@@ -393,7 +402,8 @@ struct Repossess {
                 print(
                     [
                         push.id, push.status.rawValue, push.via?.rawValue ?? "-", push.kind.rawValue,
-                        push.created.formatted(.iso8601), push.tabletID ?? "-", push.title, push.error ?? "",
+                        push.created.formatted(.iso8601), push.tabletID ?? "-", push.title, push.folder ?? "-",
+                        push.error ?? "",
                     ]
                     .joined(separator: "\t")
                 )

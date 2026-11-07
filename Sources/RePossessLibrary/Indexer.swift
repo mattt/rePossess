@@ -250,6 +250,9 @@ extension Library {
                     SQLValue(error),
                 ]
             )
+            if kind == .folder {
+                try t.query("INSERT OR IGNORE INTO seen_folders (id) VALUES (?)", [.text(id)])
+            }
             if trashed || kind == .folder {
                 try t.query("DELETE FROM pages WHERE document_id = ?", [.text(id)])
                 try t.query("DELETE FROM page_text WHERE document_id = ?", [.text(id)])
@@ -291,6 +294,16 @@ extension Library {
     /// Records the cloud's version key for a document whose copy in the mirror is newer.
     func setCloudHash(_ hash: String, id: String) throws {
         _ = try database.query("UPDATE items SET cloud_hash = ? WHERE id = ?", [.text(hash), .text(id)])
+    }
+
+    /// The cloud hash of every item that a cloud refresh read and that has no error, by ID.
+    func cloudHashes() throws -> [String: String] {
+        var result: [String: String] = [:]
+        for row in try database.query("SELECT id, cloud_hash FROM items WHERE cloud_hash IS NOT NULL AND error IS NULL")
+        {
+            if let id = row[0].string, let hash = row[1].string { result[id] = hash }
+        }
+        return result
     }
 
     /// The stored version keys of every item.

@@ -103,15 +103,22 @@ extension Library {
 
     /// Finds the top-level folder with a name, or plans a new one. It changes nothing.
     ///
-    /// - A single top-level folder with exactly that name in the mirror is used.
-    /// - Two or more are an error that lists them: rePossess does not guess.
-    /// - None means a new folder, whose ID is chosen now. An earlier push that has not failed
-    ///   and that planned a new folder with the same name lends its folder ID, so that pushes
-    ///   made before the next refresh share one new folder. An ID is lent only while no mirror item,
-    ///   trashed or not, has it: once the mirror has seen that ID, the folder may have been renamed
-    ///   or moved, so the name gets a new folder.
+    /// Names match without regard to case, and a name with `/` is refused.
     ///
-    /// The mirror's trash is not searched, and nested folders do not match: a name with `/` is refused.
+    /// - One top-level folder in the mirror with exactly that name is used, even when other folders
+    ///   differ from it only in case: the exact spelling picks one.
+    /// - Two or more folders with exactly that name are an error that lists them.
+    /// - No exact match and one or more folders that differ only in case are an error that names them,
+    ///   so that rePossess does not make a near-duplicate such as "pa 518" next to "PA 518".
+    ///   The caller can push to the existing spelling.
+    /// - No match at all means a new folder, whose ID is chosen now. An earlier push that has not failed
+    ///   and that planned a new folder with the same name lends its folder ID, so that pushes
+    ///   made before the next refresh share one new folder. An earlier push that planned a name
+    ///   which differs only in case is an error too. An ID is lent only while the mirror has not seen it:
+    ///   once the mirror has listed that ID, even if a later refresh removed it,
+    ///   the folder may have been renamed, moved, or deleted, so the name gets a new folder.
+    ///
+    /// The mirror's trash is not searched, and nested folders do not match.
     public func pushFolder(named name: String) throws -> PushFolder {
         let name = try Self.checkedFolderName(name)
         if let existing = try mirroredFolder(named: name) { return existing }
@@ -135,36 +142,65 @@ extension Library {
         return name
     }
 
-    /// The one top-level folder in the mirror with the name, or `nil`.
-    private func mirroredFolder(named name: String) throws -> PushFolder? {
-        let matches = try folders().filter { $0.parent.isEmpty && $0.name == name }
-        if matches.count > 1 {
-            let list = matches.map { folder in
+    /// Whether two folder names are the same without regard to case.
+    private static func sameName(_ a: String, _ b: String) -> Bool {
+        a.compare(b, options: .caseInsensitive) == .orderedSame
+    }
+
+    /// The one top-level folder in the mirror that a name picks, or `nil` when no folder has the name
+    /// in any case. See ``pushFolder(named:)`` for the rules.
+    func mirroredFolder(named name: String) throws -> PushFolder? {
+        let similar = try folders().filter { $0.parent.isEmpty && Self.sameName($0.name, name) }
+        let exact = similar.filter { $0.name == name }
+        func list(_ folders: [LibraryItem]) -> String {
+            folders.map { folder in
                 "\"\(folder.name)\" (ID \(folder.id)"
                     + (folder.modified.map { ", changed \($0.formatted(.iso8601))" } ?? "") + ")"
-            }
+            }.joined(separator: "; ")
+        }
+        if exact.count > 1 {
             throw PushError(
-                "\(matches.count) top-level folders are named \"\(name)\": \(list.joined(separator: "; ")). "
+                "\(exact.count) top-level folders are named \"\(name)\": \(list(exact)). "
                     + "rePossess does not choose between them; rename one on the tablet, or use another name"
             )
         }
-        return matches.first.map { PushFolder(name: name, id: $0.id, isNew: false) }
+        if let only = exact.first { return PushFolder(name: name, id: only.id, isNew: false) }
+        if !similar.isEmpty {
+            throw PushError(
+                "no top-level folder is named \"\(name)\", but \(list(similar)) differs only in case. "
+                    + "rePossess does not make a near-duplicate; push to the existing name, or use another name"
+            )
+        }
+        return nil
     }
 
     /// The folder ID of the oldest push that planned a new folder with the name,
-    /// if no mirror item has that ID; otherwise a new ID.
+    /// if the mirror has not seen that ID; otherwise a new ID.
+    /// A push that planned a name which differs only in case is an error.
     /// `run` runs the SQL, so that a caller can run it inside a transaction.
     private func lentFolderID(named name: String, run: (String, [SQLValue]) throws -> [[SQLValue]]) throws -> String {
         let earlier = try run(
             """
-            SELECT folder_id FROM pushes
-            WHERE folder = ? AND folder_new = 1 AND status != 'failed' AND folder_id IS NOT NULL
+            SELECT folder, folder_id FROM pushes
+            WHERE folder_new = 1 AND status != 'failed' AND folder IS NOT NULL AND folder_id IS NOT NULL
               AND NOT EXISTS (SELECT 1 FROM items WHERE items.id = pushes.folder_id)
-            ORDER BY created LIMIT 1
+              AND NOT EXISTS (SELECT 1 FROM seen_folders WHERE seen_folders.id = pushes.folder_id)
+            ORDER BY created, id
             """,
-            [.text(name)]
-        )
-        return earlier.first?.first?.string ?? UUID().uuidString.lowercased()
+            []
+        ).compactMap { row -> (name: String, id: String)? in
+            guard let name = row[0].string, let id = row[1].string else { return nil }
+            return (name, id)
+        }
+        if let match = earlier.first(where: { $0.name == name }) { return match.id }
+        if let near = earlier.first(where: { Self.sameName($0.name, name) }) {
+            throw PushError(
+                "an earlier push is about to make a folder named \"\(near.name)\", which differs from \"\(name)\" "
+                    + "only in case. rePossess does not make a near-duplicate; "
+                    + "push to \"\(near.name)\", or use another name"
+            )
+        }
+        return UUID().uuidString.lowercased()
     }
 
     /// Adds a push to the queue, with its payload in the library's `pushes/` folder.
@@ -217,6 +253,7 @@ extension Library {
                     record.folder = target.name
                     record.folderID = target.id
                     record.folderIsNew = target.isNew
+                    afterFolderLookup.withLock { $0 }?()
                 }
                 try transaction.query(
                     """
@@ -247,6 +284,20 @@ extension Library {
             .filter { !existing.contains($0.0) }
             .map { "ALTER TABLE pushes ADD COLUMN \($0.0) \($0.1);" }
         try database.execute("BEGIN; \(additions.joined(separator: " ")) PRAGMA user_version = 5; COMMIT;")
+    }
+
+    /// Version 6: the IDs of every folder the mirror has listed, which outlive the folder's row,
+    /// so that a folder that a refresh removed after a permanent delete does not lend its ID again.
+    func migrateToVersion6() throws {
+        try database.execute(
+            """
+            BEGIN;
+            CREATE TABLE IF NOT EXISTS seen_folders (id TEXT PRIMARY KEY);
+            INSERT OR IGNORE INTO seen_folders (id) SELECT id FROM items WHERE kind = 'CollectionType';
+            PRAGMA user_version = 6;
+            COMMIT;
+            """
+        )
     }
 
     private static let pushColumns = """
@@ -558,6 +609,29 @@ private struct PushSender {
     /// Sends a push through the cloud and returns its new state.
     private func sendCloud(_ original: PushRecord, payload: Data, session: CloudSession) async throws -> PushRecord {
         var record = original
+        // A folder that the mirror lists now may have been made after the push was queued.
+        // The push planned a new folder, so it is refused rather than moved to the other folder:
+        // the document's files already name the planned folder as their parent.
+        if record.folderIsNew == true, let name = record.folder, let id = record.folderID {
+            let problem: String?
+            do {
+                if let other = try library.mirroredFolder(named: name), other.id != id {
+                    problem =
+                        "the library lists a top-level folder named \"\(name)\" (ID \(other.id)) "
+                        + "that did not exist when the push was queued"
+                } else {
+                    problem = nil
+                }
+            } catch let error as PushError {
+                problem = "\(error)"
+            }
+            if let problem {
+                record.status = .failed
+                record.error = "Refused, because \(problem); " + CloudClient.afterRefusal
+                try library.save(record)
+                return record
+            }
+        }
         progress("Sending \"\(record.title)\" through the cloud.")
         record.status = .sending
         record.via = .cloud
@@ -568,7 +642,14 @@ private struct PushSender {
             let document = try Self.document(record, payload: payload)
             let folder = try Self.newFolder(record)
             let client = try await session.client()
-            switch try await client.push(document, folder: folder, parentName: record.folder, progress: progress) {
+            let known = try library.cloudHashes()
+            switch try await client.push(
+                document,
+                folder: folder,
+                parentName: record.folder,
+                knownEntries: known,
+                progress: progress
+            ) {
             case .sent:
                 return try record.sentNow(via: .cloud, library: library, tabletID: record.id)
             case .unknown(let reason):

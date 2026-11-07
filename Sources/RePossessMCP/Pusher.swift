@@ -64,7 +64,9 @@ public struct PushResult: Codable, Sendable, Equatable {
                 + "Do not push it again."
         case .failed:
             status = "failed"
-            message = "\(record.error ?? "It was refused."). rePossess will not send it again."
+            message =
+                "\(record.error ?? "It was refused."). rePossess will not send it again. "
+                + "It added nothing, so a new push is allowed after the cause is fixed."
         }
     }
 }

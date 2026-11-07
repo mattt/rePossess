@@ -89,7 +89,8 @@ public struct RePossessTools: Sendable {
         "type": "string", "minLength": 1, "maxLength": .int(MarkdownNotebook.maxTitleLength),
         "description": """
         The name of a top-level folder for the new document, such as a course. rePossess uses the folder \
-        with exactly this name, creates it if none has the name, and refuses if two do. \
+        with exactly this name, creates it if no folder has the name in any case, and refuses if two do \
+        or if the only match differs in case. \
         A name cannot contain /. By default the document goes at the top level.
         """,
     ]
@@ -292,15 +293,18 @@ public struct RePossessTools: Sendable {
                 Side effects: every call creates a new document, at the top level of the tablet's library \
                 or in the top-level folder that folder names; \
                 it never changes or replaces an existing document, so calling it twice makes two copies. \
-                With folder, rePossess uses the one top-level folder with that exact name; \
-                if none has the name, it creates the folder; if two or more have it, it sends nothing \
-                and the error lists them. A push with a folder goes through reMarkable's cloud only, \
+                With folder, names match without regard to case. rePossess uses the one top-level folder \
+                with that exact name; if no folder has the name in any case, it creates the folder; \
+                if two or more have the exact name, or the only match differs in case, it sends nothing \
+                and the error names them. A push with a folder goes through reMarkable's cloud only, \
                 because the USB web interface cannot choose or make a folder; \
                 without the cloud it is "queued" until rePossess is paired. \
                 It never renames, moves, or deletes a folder or a document. \
-                Do not call it again to retry: check the result's status instead. \
+                Do not call it again to retry a push that is "queued" or "unknown": check the result's status instead. \
                 "sent" means the tablet or reMarkable's cloud has it; "queued" and "unknown" mean rePossess \
-                sends it, or checks whether it arrived, at the next refresh; "failed" means it was refused. \
+                sends it, or checks whether it arrived, at the next refresh; "failed" means it was refused \
+                and added nothing, so a new call is allowed after the cause in the error is fixed, \
+                such as after refresh_documents when a folder changed. \
                 Headings become Title (#) and Subheading (## to ######); bullets, nested bullets, and \
                 task lists keep their styles; emphasis, links, and inline code become plain text; \
                 numbered items keep their numbers; code blocks and tables become plain lines. \
@@ -340,15 +344,18 @@ public struct RePossessTools: Sendable {
                 Side effects: every call creates a new document, at the top level of the tablet's library \
                 or in the top-level folder that folder names; \
                 it never changes or replaces an existing document, so calling it twice makes two copies. \
-                With folder, rePossess uses the one top-level folder with that exact name; \
-                if none has the name, it creates the folder; if two or more have it, it sends nothing \
-                and the error lists them. A push with a folder goes through reMarkable's cloud only, \
+                With folder, names match without regard to case. rePossess uses the one top-level folder \
+                with that exact name; if no folder has the name in any case, it creates the folder; \
+                if two or more have the exact name, or the only match differs in case, it sends nothing \
+                and the error names them. A push with a folder goes through reMarkable's cloud only, \
                 because the USB web interface cannot choose or make a folder; \
                 without the cloud it is "queued" until rePossess is paired. \
                 It never renames, moves, or deletes a folder or a document. \
-                Do not call it again to retry: check the result's status instead. \
+                Do not call it again to retry a push that is "queued" or "unknown": check the result's status instead. \
                 "sent" means the tablet or reMarkable's cloud has it; "queued" and "unknown" mean rePossess \
-                sends it, or checks whether it arrived, at the next refresh; "failed" means it was refused. \
+                sends it, or checks whether it arrived, at the next refresh; "failed" means it was refused \
+                and added nothing, so a new call is allowed after the cause in the error is fixed, \
+                such as after refresh_documents when a folder changed. \
                 Limits: \(Library.maxPushBytes / 1_000_000) MB, https URLs only, \
                 and a title of at most \(MarkdownNotebook.maxTitleLength) characters.
                 """,

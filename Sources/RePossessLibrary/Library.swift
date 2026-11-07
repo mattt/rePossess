@@ -131,6 +131,8 @@ public final class Library: Sendable {
     public let root: URL
     let database: Database
     let refreshing = Mutex(false)
+    /// Runs inside an enqueue's transaction, after the folder lookup, so that a test can hold the window open.
+    let afterFolderLookup = Mutex<(@Sendable () -> Void)?>(nil)
 
     /// The default folder: `~/Library/Application Support/rePossess/`.
     public static var defaultRoot: URL {
@@ -159,6 +161,7 @@ public final class Library: Sendable {
         if version < 3 { try migrateToVersion3() }
         if version < 4 { try migrateToVersion4() }
         if version < 5 { try migrateToVersion5() }
+        if version < 6 { try migrateToVersion6() }
     }
 
     /// The first-run fixes (2026-10-25): images on notebook pages, and search text without Markdown markers.
