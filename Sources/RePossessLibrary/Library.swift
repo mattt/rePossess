@@ -158,6 +158,7 @@ public final class Library: Sendable {
         if version < 2 { try migrateToVersion2() }
         if version < 3 { try migrateToVersion3() }
         if version < 4 { try migrateToVersion4() }
+        if version < 5 { try migrateToVersion5() }
     }
 
     /// The first-run fixes (2026-10-25): images on notebook pages, and search text without Markdown markers.

@@ -451,7 +451,14 @@ extension RePossessTools {
         guard let markdown = Self.string(arguments, "markdown") else { throw ToolError("markdown is required.") }
         let paginate = arguments["paginate"]?.boolValue ?? false
         do {
-            return try Self.json(try await pusher.pushMarkdown(title: title, markdown: markdown, paginate: paginate))
+            return try Self.json(
+                try await pusher.pushMarkdown(
+                    title: title,
+                    markdown: markdown,
+                    paginate: paginate,
+                    folder: Self.string(arguments, "folder")
+                )
+            )
         } catch let error as NotebookError {
             throw ToolError("Nothing was sent: \(error).")
         } catch let error as PushError {
@@ -466,7 +473,12 @@ extension RePossessTools {
         guard (path == nil) != (url == nil) else { throw ToolError("Give exactly one of path or url.") }
         do {
             return try Self.json(
-                try await pusher.pushFile(path: path, url: url, title: Self.string(arguments, "title"))
+                try await pusher.pushFile(
+                    path: path,
+                    url: url,
+                    title: Self.string(arguments, "title"),
+                    folder: Self.string(arguments, "folder")
+                )
             )
         } catch let error as NotebookError {
             throw ToolError("Nothing was sent: \(error).")

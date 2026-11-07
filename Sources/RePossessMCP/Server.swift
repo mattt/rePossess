@@ -19,7 +19,9 @@ public let serverInstructions = """
     and image is a PDF or EPUB whose pages have no text layer, such as a scan. \
     If a document the user just made is missing, call refresh_documents. \
     push_markdown and push_file add a new document to the tablet with every call; \
-    never call them to retry, and call them only when the user asks to send something.
+    never call them to retry, and call them only when the user asks to send something. \
+    Their optional folder argument names a top-level folder for the document, which rePossess \
+    creates when it does not exist.
     """
 
 /// Starts the tools' server on a transport.

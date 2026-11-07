@@ -85,6 +85,15 @@ public struct RePossessTools: Sendable {
         "description": "The page number, starting at 1, as the tablet shows it.",
     ]
 
+    static let folderProperty: Value = [
+        "type": "string", "minLength": 1, "maxLength": .int(MarkdownNotebook.maxTitleLength),
+        "description": """
+        The name of a top-level folder for the new document, such as a course. rePossess uses the folder \
+        with exactly this name, creates it if none has the name, and refuses if two do. \
+        A name cannot contain /. By default the document goes at the top level.
+        """,
+    ]
+
     public static let all: [Tool] = [
         Tool(
             name: "get_overview",
@@ -280,8 +289,15 @@ public struct RePossessTools: Sendable {
             title: "Send Markdown to the tablet",
             description: """
                 Send Markdown to the reMarkable tablet as a new notebook with typed text that the user can edit. \
-                Side effects: every call creates a new document at the top level of the tablet's library; \
+                Side effects: every call creates a new document, at the top level of the tablet's library \
+                or in the top-level folder that folder names; \
                 it never changes or replaces an existing document, so calling it twice makes two copies. \
+                With folder, rePossess uses the one top-level folder with that exact name; \
+                if none has the name, it creates the folder; if two or more have it, it sends nothing \
+                and the error lists them. A push with a folder goes through reMarkable's cloud only, \
+                because the USB web interface cannot choose or make a folder; \
+                without the cloud it is "queued" until rePossess is paired. \
+                It never renames, moves, or deletes a folder or a document. \
                 Do not call it again to retry: check the result's status instead. \
                 "sent" means the tablet or reMarkable's cloud has it; "queued" and "unknown" mean rePossess \
                 sends it, or checks whether it arrived, at the next refresh; "failed" means it was refused. \
@@ -308,6 +324,7 @@ public struct RePossessTools: Sendable {
                         "description":
                             "Start a new page at each ## heading. By default all the text goes on one page, which the tablet makes as long as the text.",
                     ],
+                    "folder": Self.folderProperty,
                 ],
                 "required": ["title", "markdown"],
                 "additionalProperties": false,
@@ -320,8 +337,15 @@ public struct RePossessTools: Sendable {
             description: """
                 Send a PDF or EPUB file to the reMarkable tablet as a new document. \
                 Give exactly one of path, a file on this Mac, or url, an https URL that rePossess downloads. \
-                Side effects: every call creates a new document at the top level of the tablet's library; \
+                Side effects: every call creates a new document, at the top level of the tablet's library \
+                or in the top-level folder that folder names; \
                 it never changes or replaces an existing document, so calling it twice makes two copies. \
+                With folder, rePossess uses the one top-level folder with that exact name; \
+                if none has the name, it creates the folder; if two or more have it, it sends nothing \
+                and the error lists them. A push with a folder goes through reMarkable's cloud only, \
+                because the USB web interface cannot choose or make a folder; \
+                without the cloud it is "queued" until rePossess is paired. \
+                It never renames, moves, or deletes a folder or a document. \
                 Do not call it again to retry: check the result's status instead. \
                 "sent" means the tablet or reMarkable's cloud has it; "queued" and "unknown" mean rePossess \
                 sends it, or checks whether it arrived, at the next refresh; "failed" means it was refused. \
@@ -339,6 +363,7 @@ public struct RePossessTools: Sendable {
                         "type": "string", "minLength": 1, "maxLength": .int(MarkdownNotebook.maxTitleLength),
                         "description": "The document's name on the tablet. The default is the file's name.",
                     ],
+                    "folder": Self.folderProperty,
                 ],
                 "additionalProperties": false,
             ],

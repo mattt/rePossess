@@ -19,9 +19,12 @@ public struct PushResult: Codable, Sendable, Equatable {
     public let pages: Int?
     public let bytes: Int
     public let message: String
+    /// The top-level folder that the push goes into, when it names one.
+    public let folder: String?
 
     init(_ record: PushRecord, busy: Bool = false) {
         push_id = record.id
+        folder = record.folder
         title = record.title
         kind = record.kind.rawValue
         via = record.via?.rawValue
@@ -32,10 +35,17 @@ public struct PushResult: Codable, Sendable, Equatable {
         switch record.status {
         case .sent:
             status = "sent"
+            let place =
+                record.folder.map { "in the folder \"\($0)\"" } ?? "at the top level of the library"
+            let created =
+                record.folderIsNew == true
+                ? " The mirror had no folder with that name, so the push added a new one, "
+                    + "unless an earlier push had already added it."
+                : ""
             message =
                 record.via == .cloud
-                ? "Sent through reMarkable's cloud as a new document, \"\(record.title)\", at the top level "
-                    + "of the library. The tablet shows it after it syncs."
+                ? "Sent through reMarkable's cloud as a new document, \"\(record.title)\", \(place). "
+                    + "The tablet shows it after it syncs.\(created)"
                 : "Sent over USB as a new document, \"\(record.title)\", at the top level of the tablet's library."
         case .pending:
             status = "queued"
@@ -98,7 +108,16 @@ public struct Pusher: Sendable {
     }
 
     /// Makes a notebook from Markdown, queues it, and sends what waits.
-    public func pushMarkdown(title: String, markdown: String, paginate: Bool) async throws -> PushResult {
+    ///
+    /// - Parameters:
+    ///   - folder: The name of a top-level folder; see ``Library/pushFolder(named:now:)``.
+    ///     A name that two folders share refuses the push before anything is queued.
+    public func pushMarkdown(
+        title: String,
+        markdown: String,
+        paginate: Bool,
+        folder: String? = nil
+    ) async throws -> PushResult {
         let id = UUID().uuidString.lowercased()
         let notebook = try MarkdownNotebook(title: title, markdown: markdown, paginate: paginate, documentID: id)
         let record = try library.enqueuePush(
@@ -106,13 +125,20 @@ public struct Pusher: Sendable {
             kind: .notebook,
             title: notebook.title,
             data: notebook.rmdoc,
-            pages: notebook.pageCount
+            pages: notebook.pageCount,
+            folder: folder
         )
         return try await send(record)
     }
 
     /// Reads a PDF or an EPUB from a path or an https URL, queues it, and sends what waits.
-    public func pushFile(path: String?, url: String?, title: String?) async throws -> PushResult {
+    ///
+    /// - Parameters:
+    ///   - folder: The name of a top-level folder; the folder is checked before a URL is downloaded.
+    public func pushFile(path: String?, url: String?, title: String?, folder: String? = nil) async throws
+        -> PushResult
+    {
+        _ = try folder.map { try library.pushFolder(named: $0) }
         let data: Data
         let defaultTitle: String
         switch (path, url) {
@@ -131,7 +157,7 @@ public struct Pusher: Sendable {
             throw PushError("Give exactly one of path or url.")
         }
         let kind = try Self.kind(of: data)
-        let record = try library.enqueuePush(kind: kind, title: title ?? defaultTitle, data: data)
+        let record = try library.enqueuePush(kind: kind, title: title ?? defaultTitle, data: data, folder: folder)
         return try await send(record)
     }
 
