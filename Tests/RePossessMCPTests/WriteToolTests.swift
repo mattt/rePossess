@@ -117,6 +117,62 @@ func namingTablet() async -> FakeTablet {
         #expect(try await cloud.documentFiles(id: id)["\(id).pdf"] != nil)
     }
 
+    @Test func pushMarkdownWithAFolderCreatesItThroughTheCloud() async throws {
+        let cloud = FakeCloud()
+        try await cloud.seedRoot([], schema: .v3)
+        let session = CloudSession(transport: cloud, deviceToken: { FakeCloud.deviceToken })
+        let tablet = await namingTablet()
+        let tools = try await writableTools(
+            tablet: tablet,
+            paths: { PushPaths(usb: { USBClient(transport: tablet, checkInterface: { true }) }, cloud: session) }
+        )
+        let object = try json(
+            await call(
+                tools,
+                "push_markdown",
+                ["title": "rePossess test note", "markdown": "- one", "folder": "Biology 101"]
+            )
+        )
+        #expect(object["status"] as? String == "sent" && object["via"] as? String == "cloud")
+        #expect(object["folder"] as? String == "Biology 101")
+        let message = try #require(object["message"] as? String)
+        #expect(message.contains("in the folder \"Biology 101\"") && message.contains("added a new one"))
+        #expect(await tablet.uploads.isEmpty)
+        #expect(try await cloud.currentRootIndex().entries.count == 2)
+    }
+
+    @Test func aFolderPushWithOnlyUSBIsQueuedAndSaysWhy() async throws {
+        let tablet = await namingTablet()
+        let tools = try await writableTools(
+            tablet: tablet,
+            paths: { PushPaths(usb: { USBClient(transport: tablet, checkInterface: { true }) }, cloud: nil) }
+        )
+        let object = try json(
+            await call(
+                tools,
+                "push_markdown",
+                ["title": "rePossess test note", "markdown": "- one", "folder": "Biology 101"]
+            )
+        )
+        #expect(object["status"] as? String == "queued" && object["via"] == nil)
+        #expect((object["message"] as? String)?.contains("needs reMarkable's cloud") == true)
+        #expect(await tablet.uploads.isEmpty)
+    }
+
+    @Test func aDuplicateFolderNameRefusesPushFileAndLeavesTheQueueEmpty() async throws {
+        let tablet = FakeTablet()
+        await tablet.add(USBItem(id: "folder-a", type: "CollectionType", visibleName: "Math"))
+        await tablet.add(USBItem(id: "folder-b", type: "CollectionType", visibleName: "Math"))
+        let tools = try await writableTools(tablet: tablet, paths: { .none })
+        let file = FileManager.default.temporaryDirectory.appending(path: "rePossess test \(UUID().uuidString).pdf")
+        try makeExport(heights: [594]).write(to: file)
+        let result = await call(tools, "push_file", ["path": .string(file.path), "folder": "Math"])
+        #expect(result.isError == true)
+        let text = texts(result)[0]
+        #expect(text.hasPrefix("Nothing was sent") && text.contains("folder-a") && text.contains("folder-b"))
+        #expect(try tools.library.pushes().isEmpty)
+    }
+
     @Test func pushFileDownloadsOnlyHTTPS() async throws {
         let epub = Data(
             [0x50, 0x4B, 0x03, 0x04] + Array(repeating: 0, count: 26) + Array("mimetypeapplication/epub+zip".utf8)

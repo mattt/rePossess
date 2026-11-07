@@ -82,13 +82,32 @@ For another client that supports MCP over stdio, use:
 
 Try asking your client to "Find my notes about the garden"
 or "Send a new packing checklist to my reMarkable."
-Each push creates a **new document** at the top level of the tablet's library.
+Each push creates a **new document**,
+by default at the top level of the tablet's library.
 It never edits or replaces an existing document.
 If the tablet and cloud are unavailable, the push waits in a local queue
 until a later refresh or push can send it.
 If a push reports a queued or unknown result, don't repeat the request:
 each request creates another document.
 Check its status before sending again.
+
+A push can name a top-level folder, such as a course:
+ask your client to "Send these notes to my Biology 101 folder."
+The client passes the name in the `folder` argument of `push_markdown` or `push_file`,
+and the command-line helper takes `--folder <name>`.
+rePossess uses the one top-level folder in its copy of your library
+that has exactly that name.
+If none has the name, it creates the folder with the document.
+If two or more have it, rePossess sends nothing and lists them.
+Before it sends, it checks that the cloud's folder is still at the top level with that name,
+and refuses the push if someone renamed or moved it.
+Nested paths are not supported, and a name cannot contain `/`.
+The USB web interface cannot choose or create a folder,
+so a push with a folder always goes through the cloud
+and waits in the queue until rePossess is paired.
+Creating a folder through the cloud is unverified on a real tablet.
+A new folder is a new item: rePossess never renames, moves, or deletes
+an existing folder or document.
 
 Markdown becomes a native notebook with titles, subheadings, bullets,
 and checkboxes.
@@ -150,7 +169,8 @@ MCP clients have access to the library as described above.
 This preview has limits:
 
 - It adds documents but cannot edit, delete, move, or rename existing ones.
-  It does not manage folders or multiple tablets.
+  It can put a new document in a top-level folder, and create that folder,
+  but it does not move or rename folders or manage multiple tablets.
 - It uses an unofficial cloud API, which can change.
 - Its own page rendering may differ from the tablet's layout
   and does not draw page templates.
@@ -176,6 +196,7 @@ repossess list
 repossess status
 repossess push-markdown checklist.md --title "Packing checklist"
 repossess push-file guide.pdf
+repossess push-file syllabus.pdf --folder "Biology 101"
 repossess pushes
 ```
 

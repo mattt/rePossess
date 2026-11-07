@@ -35,6 +35,8 @@ actor FakeCloud: HTTPTransport {
     var fileFailures: [Int] = []
     /// How many root updates find the generation changed by another device first.
     var interveningSyncs = 0
+    /// A rename or move that the first intervening sync also makes, as another client would.
+    var interveningFolderChange: (id: String, name: String, parent: String)?
     /// What happens to the next root update's answer.
     var rootUpdateLoss: RootUpdateLoss?
     /// Whether root reads fail after a lost root update, as when the network is down.
@@ -57,6 +59,10 @@ actor FakeCloud: HTTPTransport {
     }
 
     init() {}
+
+    func set(interveningFolderChange: (id: String, name: String, parent: String)?) {
+        self.interveningFolderChange = interveningFolderChange
+    }
 
     func set(interveningSyncs: Int = 0, rootUpdateLoss: RootUpdateLoss? = nil, failRootReadsAfterLoss: Bool = false) {
         self.interveningSyncs = interveningSyncs
@@ -144,6 +150,17 @@ actor FakeCloud: HTTPTransport {
         rootHash = hash
         schemaVersion = schema.rawValue
         generation += 1
+    }
+
+    /// Renames or moves a folder, as another client would: the folder's entry gets new metadata.
+    func changeFolder(id: String, name: String, parent: String) throws {
+        let json = "{\"visibleName\": \"\(name)\", \"type\": \"CollectionType\", \"parent\": \"\(parent)\"}"
+        let entry = try seedDocument(
+            id: id,
+            files: [("\(id).metadata", Data(json.utf8)), ("\(id).content", Data("{}".utf8))]
+        )
+        let others = try currentRootIndex().entries.filter { $0.id != id }
+        try seedRoot(others + [entry])
     }
 
     func send(_ request: HTTPRequest) async throws -> HTTPResponse {
@@ -253,6 +270,10 @@ actor FakeCloud: HTTPTransport {
         if interveningSyncs > 0 {
             interveningSyncs -= 1
             generation += 1
+            if let change = interveningFolderChange {
+                interveningFolderChange = nil
+                try? changeFolder(id: change.id, name: change.name, parent: change.parent)
+            }
         }
         guard request.headers["content-type"] == "application/json", let body = request.body,
             let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],

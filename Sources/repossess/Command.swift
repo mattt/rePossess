@@ -21,11 +21,18 @@ let usage = """
       mcp                         Serve the tools over MCP on standard input and output.
 
     Commands that add documents to the tablet (each push makes a new document; none replaces one):
-      push-markdown <file.md | -> --title <title> [--paginate] [--usb | --cloud] [--out <file.rmdoc>]
+      push-markdown <file.md | -> --title <title> [--folder <name>] [--paginate] [--usb | --cloud]
+                    [--out <file.rmdoc>]
                                   Send Markdown as a notebook. --paginate starts a page at each ## heading.
                                   --out writes the notebook to a file and sends nothing.
-      push-file <path | https-url> [--title <title>] [--usb | --cloud]
+      push-file <path | https-url> [--title <title>] [--folder <name>] [--usb | --cloud]
                                   Send a PDF or EPUB.
+                                  --folder puts the new document in the top-level folder with exactly that
+                                  name, creates the folder if none has it, and refuses if two do. It goes
+                                  through the cloud only, because the USB web interface cannot choose or make
+                                  a folder; without the cloud it waits in the queue. It never renames,
+                                  moves, or deletes a folder or a document. Without it, the document goes
+                                  at the top level.
       pushes                      List the queue of pushes and what happened to each.
       drop-push <id>              Remove a push that has not been sent.
 
@@ -82,7 +89,7 @@ struct Arguments {
 
     static let valued: Set<String> = [
         "--library", "--out", "--scale", "--rmdoc", "--title", "--model", "--base-url", "--model-path", "--images",
-        "--provider", "--pages", "--limit",
+        "--provider", "--pages", "--limit", "--folder",
     ]
 
     init(_ arguments: [String]) throws {
@@ -117,6 +124,7 @@ func describe(_ result: PushResult) -> String {
     var lines = [
         "Push: \(result.push_id)", "Title: \(result.title)", "Kind: \(result.kind)", "Status: \(result.status)",
     ]
+    if let folder = result.folder { lines.append("Folder: \(folder)") }
     if let via = result.via { lines.append("Via: \(via == "usb" ? "USB" : "cloud")") }
     if let id = result.tablet_id { lines.append("Document ID: \(id)") }
     if let pages = result.pages { lines.append("Pages: \(pages)") }
@@ -331,6 +339,9 @@ struct Repossess {
                 : try String(contentsOf: URL(filePath: (source as NSString).expandingTildeInPath), encoding: .utf8)
             let paginate = arguments.flags.contains("--paginate")
             if let out = arguments.options["--out"] {
+                guard arguments.options["--folder"] == nil else {
+                    throw UsageError("--out sends nothing, so it takes no --folder")
+                }
                 let notebook = try MarkdownNotebook(title: title, markdown: markdown, paginate: paginate)
                 try notebook.rmdoc.write(to: URL(filePath: out))
                 print(
@@ -346,7 +357,16 @@ struct Repossess {
                 paths: try pushPaths(arguments, session: session),
                 progress: { printError($0) }
             )
-            print(describe(try await pusher.pushMarkdown(title: title, markdown: markdown, paginate: paginate)))
+            print(
+                describe(
+                    try await pusher.pushMarkdown(
+                        title: title,
+                        markdown: markdown,
+                        paginate: paginate,
+                        folder: arguments.options["--folder"]
+                    )
+                )
+            )
 
         case "push-file":
             guard arguments.positional.count == 1 else { throw UsageError("push-file needs a path or an https URL") }
@@ -362,7 +382,8 @@ struct Repossess {
             let result = try await pusher.pushFile(
                 path: isURL ? nil : target,
                 url: isURL ? target : nil,
-                title: arguments.options["--title"]
+                title: arguments.options["--title"],
+                folder: arguments.options["--folder"]
             )
             print(describe(result))
 

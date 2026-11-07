@@ -35,6 +35,86 @@ private enum Upload {
     }
 }
 
+@Suite struct UploadFolderPlannerTests {
+    static let folderID = "99999999-9999-4999-8999-999999999999"
+
+    @Test func addsANewFolderAndTheDocumentToOneRootIndex() throws {
+        let document = try NewDocument.file(
+            .pdf,
+            visibleName: "rePossess test",
+            data: Upload.pdf,
+            documentID: Upload.documentID,
+            parent: Self.folderID,
+            pageID: Upload.pageID,
+            now: Upload.now
+        )
+        let folder = try NewFolder.make(visibleName: "Biology 101", folderID: Self.folderID, now: Upload.now)
+        let index = try SyncIndex(parsing: Data(Fixtures.rootV4.utf8))
+        let root = RootState(hash: try index.hash(), generation: 42, schemaVersion: 4)
+        let plan = try UploadPlanner.plan(document, newFolder: folder, root: root, rootIndex: index)
+
+        let id = Upload.documentID
+        #expect(
+            plan.blobPuts.map(\.fileName) == [
+                "\(Self.folderID).content", "\(Self.folderID).metadata", "\(Self.folderID).docSchema",
+                "\(id).content", "\(id).metadata", "\(id).pagedata", "\(id).pdf", "\(id).docSchema", "root.docSchema",
+            ]
+        )
+        let newRoot = try SyncIndex(parsing: plan.rootIndexPut.body)
+        #expect(newRoot.entries.count == index.entries.count + 2)
+        for entry in index.entries { #expect(newRoot.entries.contains(entry)) }
+        #expect(newRoot.entries.contains(try #require(plan.folderEntry)) && newRoot.entries.contains(plan.rootEntry))
+        #expect(newRoot.isSorted)
+
+        let folderMetadata = try JSONSerialization.jsonObject(with: plan.folderFilePuts[1].body) as! [String: Any]
+        #expect(folderMetadata["type"] as? String == "CollectionType" && folderMetadata["parent"] as? String == "")
+        #expect(folderMetadata["visibleName"] as? String == "Biology 101")
+        let documentMetadata = try JSONSerialization.jsonObject(with: plan.filePuts[1].body) as! [String: Any]
+        #expect(documentMetadata["parent"] as? String == Self.folderID)
+    }
+
+    @Test func refusesAParentThatIsNotInTheRoot() throws {
+        let document = try NewDocument.file(
+            .pdf,
+            visibleName: "x",
+            data: Upload.pdf,
+            documentID: Upload.documentID,
+            parent: Self.folderID
+        )
+        #expect(throws: CloudError.self) { try Upload.plan(document) }
+        let other = try NewFolder.make(visibleName: "Other", folderID: Upload.pageID)
+        let index = try SyncIndex(parsing: Data(Fixtures.rootV4.utf8))
+        let root = RootState(hash: try index.hash(), generation: 42, schemaVersion: 4)
+        #expect(throws: CloudError.self) {
+            try UploadPlanner.plan(document, newFolder: other, root: root, rootIndex: index)
+        }
+        #expect(throws: CloudError.self) {
+            try NewDocument.file(
+                .pdf,
+                visibleName: "x",
+                data: Upload.pdf,
+                documentID: Upload.documentID,
+                parent: "../x"
+            )
+        }
+    }
+
+    @Test func aNotebookArchiveGetsTheParentInItsMetadata() throws {
+        let archiveID = "88888888-8888-4888-8888-888888888888"
+        let document = try NewDocument.notebook(
+            files: Upload.notebookFiles(archiveID: archiveID),
+            archiveID: archiveID,
+            visibleName: "rePossess test",
+            documentID: Upload.documentID,
+            parent: Self.folderID
+        )
+        let file = try #require(document.files.first { $0.name.hasSuffix(".metadata") })
+        let object = try JSONSerialization.jsonObject(with: file.data) as! [String: Any]
+        #expect(object["parent"] as? String == Self.folderID && object["type"] as? String == "DocumentType")
+        #expect(document.parent == Self.folderID)
+    }
+}
+
 @Suite struct UploadPlannerTests {
     @Test func producesTheExactPutsForAPDF() throws {
         let plan = try Upload.plan()
