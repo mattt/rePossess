@@ -121,7 +121,9 @@ public struct CloudClient: Sendable {
     /// Adds a new document to the top level of the account, or into a folder.
     ///
     /// A document whose `parent` is a folder ID goes into that folder.
-    /// When the root lists the folder, a read of its `.metadata` must show a folder that is not in the trash.
+    /// When the root lists the folder, a read of its `.metadata` must show a folder that is not in the trash,
+    /// is at the top level, and has the expected name (`parentName`, or else the new folder's name).
+    /// A folder that someone renamed or moved after rePossess chose its ID is refused, and nothing is sent.
     /// When it does not, `folder` must be the new folder with that ID, and the same root update adds both.
     /// A document with a `parent` and no such folder is refused, and nothing is sent.
     ///
@@ -146,6 +148,7 @@ public struct CloudClient: Sendable {
     public func push(
         _ document: NewDocument,
         folder: NewFolder? = nil,
+        parentName: String? = nil,
         attempts: Int = 3,
         progress: @Sendable (String) -> Void = { _ in }
     ) async throws -> CloudPushOutcome {
@@ -160,7 +163,7 @@ public struct CloudClient: Sendable {
             if !document.parent.isEmpty {
                 if let entry = index.entries.first(where: { $0.id == document.parent }) {
                     if !verifiedFolder {
-                        try await requireLiveFolder(entry)
+                        try await requireLiveFolder(entry, name: parentName ?? folder?.visibleName)
                         verifiedFolder = true
                     }
                 } else if let folder, folder.folderID == document.parent {
@@ -205,8 +208,9 @@ public struct CloudClient: Sendable {
         throw CloudError.generationConflict
     }
 
-    /// Reads a folder's `.metadata` and requires a folder that is not in the trash.
-    private func requireLiveFolder(_ entry: IndexEntry) async throws {
+    /// Reads a folder's `.metadata` and requires a top-level folder that is not in the trash,
+    /// with the given name when there is one.
+    private func requireLiveFolder(_ entry: IndexEntry, name: String?) async throws {
         let fetched = try await index(id: entry.id, hash: entry.hash)
         guard fetched.hashMatches else {
             throw CloudError.hashMismatch(expected: entry.hash, actual: (try? fetched.index.hash()) ?? "")
@@ -222,6 +226,17 @@ public struct CloudClient: Sendable {
         }
         if metadata["parent"] as? String == "trash" || metadata["deleted"] as? Bool == true {
             throw CloudError.invalidUpload("the folder \(entry.id) is in the trash")
+        }
+        if let parent = metadata["parent"] as? String, !parent.isEmpty {
+            throw CloudError.invalidUpload(
+                "the folder \(entry.id) is no longer at the top level, so rePossess does not put a document in it"
+            )
+        }
+        if let name, metadata["visibleName"] as? String != name {
+            let found = (metadata["visibleName"] as? String).map { "\"\($0)\"" } ?? "no name"
+            throw CloudError.invalidUpload(
+                "the folder \(entry.id) is named \(found), not \"\(name)\", so rePossess does not put a document in it"
+            )
         }
     }
 

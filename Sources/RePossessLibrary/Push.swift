@@ -105,12 +105,20 @@ extension Library {
     ///
     /// - A single top-level folder with exactly that name in the mirror is used.
     /// - Two or more are an error that lists them: rePossess does not guess.
-    /// - None means a new folder, whose ID is chosen now. An earlier push that is still waiting,
-    ///   or that was sent in the last day, and that planned a new folder with the same name
-    ///   lends its folder ID, so that pushes made before the next refresh share one new folder.
+    /// - None means a new folder, whose ID is chosen now. An earlier push that has not failed
+    ///   and that planned a new folder with the same name lends its folder ID, so that pushes
+    ///   made before the next refresh share one new folder. An ID is lent only while no mirror item,
+    ///   trashed or not, has it: once the mirror has seen that ID, the folder may have been renamed
+    ///   or moved, so the name gets a new folder.
     ///
     /// The mirror's trash is not searched, and nested folders do not match: a name with `/` is refused.
-    public func pushFolder(named name: String, now: Date = Date()) throws -> PushFolder {
+    public func pushFolder(named name: String) throws -> PushFolder {
+        let name = try Self.checkedFolderName(name)
+        if let existing = try mirroredFolder(named: name) { return existing }
+        return PushFolder(name: name, id: try lentFolderID(named: name) { try database.query($0, $1) }, isNew: true)
+    }
+
+    private static func checkedFolderName(_ name: String) throws -> String {
         let name = name.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { throw PushError("the folder name is empty") }
         guard name.count <= MarkdownNotebook.maxTitleLength else {
@@ -124,6 +132,11 @@ extension Library {
         guard !name.contains("/") else {
             throw PushError("a folder name cannot contain /; a push goes into one top-level folder, not a path")
         }
+        return name
+    }
+
+    /// The one top-level folder in the mirror with the name, or `nil`.
+    private func mirroredFolder(named name: String) throws -> PushFolder? {
         let matches = try folders().filter { $0.parent.isEmpty && $0.name == name }
         if matches.count > 1 {
             let list = matches.map { folder in
@@ -135,24 +148,33 @@ extension Library {
                     + "rePossess does not choose between them; rename one on the tablet, or use another name"
             )
         }
-        if let folder = matches.first { return PushFolder(name: name, id: folder.id, isNew: false) }
-        let earlier = try database.query(
+        return matches.first.map { PushFolder(name: name, id: $0.id, isNew: false) }
+    }
+
+    /// The folder ID of the oldest push that planned a new folder with the name,
+    /// if no mirror item has that ID; otherwise a new ID.
+    /// `run` runs the SQL, so that a caller can run it inside a transaction.
+    private func lentFolderID(named name: String, run: (String, [SQLValue]) throws -> [[SQLValue]]) throws -> String {
+        let earlier = try run(
             """
             SELECT folder_id FROM pushes
-            WHERE folder = ? AND folder_new = 1 AND status != 'failed' AND (status != 'sent' OR sent > ?)
+            WHERE folder = ? AND folder_new = 1 AND status != 'failed' AND folder_id IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM items WHERE items.id = pushes.folder_id)
             ORDER BY created LIMIT 1
             """,
-            [.text(name), SQLValue(now.addingTimeInterval(-86400))]
+            [.text(name)]
         )
-        let id = earlier.first?.first?.string ?? UUID().uuidString.lowercased()
-        return PushFolder(name: name, id: id, isNew: true)
+        return earlier.first?.first?.string ?? UUID().uuidString.lowercased()
     }
 
     /// Adds a push to the queue, with its payload in the library's `pushes/` folder.
     ///
+    /// The folder lookup and the insert run in one immediate transaction,
+    /// so that two processes that queue pushes for the same new folder get the same folder ID.
+    ///
     /// - Parameters:
     ///   - id: The push's ID; a notebook's archive must use it as its document ID.
-    ///   - folder: The name of a top-level folder; see ``pushFolder(named:now:)``.
+    ///   - folder: The name of a top-level folder; see ``pushFolder(named:)``.
     ///     A push with a folder goes only through the cloud, because the USB web interface
     ///     cannot choose a folder or make one.
     public func enqueuePush(
@@ -167,7 +189,8 @@ extension Library {
         guard data.count <= Self.maxPushBytes else {
             throw PushError("the file has \(data.count) bytes; the limit is \(Self.maxPushBytes)")
         }
-        let target = try folder.map { try pushFolder(named: $0, now: now) }
+        let folderName = try folder.map(Self.checkedFolderName)
+        let existing = try folderName.flatMap(mirroredFolder(named:))
         var record = PushRecord(
             id: id,
             kind: kind,
@@ -179,22 +202,40 @@ extension Library {
             attempts: 0,
             preexisting: []
         )
-        record.folder = target?.name
-        record.folderID = target?.id
-        record.folderIsNew = target?.isNew
         try FileManager.default.createDirectory(at: pushesURL, withIntermediateDirectories: true)
         try data.write(to: payloadURL(record), options: .atomic)
-        try database.query(
-            """
-            INSERT INTO pushes (id, kind, title, payload, bytes, pages, created, status, folder, folder_id, folder_new)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-            """,
-            [
-                .text(id), .text(kind.rawValue), .text(record.title), .text(payloadURL(record).lastPathComponent),
-                SQLValue(data.count), SQLValue(pages), SQLValue(now),
-                SQLValue(record.folder), SQLValue(record.folderID), SQLValue(record.folderIsNew.map { $0 ? 1 : 0 }),
-            ]
-        )
+        do {
+            try database.transaction { transaction in
+                if let folderName {
+                    let target =
+                        try existing
+                        ?? PushFolder(
+                            name: folderName,
+                            id: lentFolderID(named: folderName) { try transaction.query($0, $1) },
+                            isNew: true
+                        )
+                    record.folder = target.name
+                    record.folderID = target.id
+                    record.folderIsNew = target.isNew
+                }
+                try transaction.query(
+                    """
+                    INSERT INTO pushes (id, kind, title, payload, bytes, pages, created, status, folder, folder_id, folder_new)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                    """,
+                    [
+                        .text(id), .text(kind.rawValue), .text(record.title),
+                        .text(payloadURL(record).lastPathComponent),
+                        SQLValue(data.count), SQLValue(pages), SQLValue(now),
+                        SQLValue(record.folder), SQLValue(record.folderID),
+                        SQLValue(record.folderIsNew.map { $0 ? 1 : 0 }),
+                    ]
+                )
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: payloadURL(record))
+            throw error
+        }
         return record
     }
 
@@ -527,7 +568,7 @@ private struct PushSender {
             let document = try Self.document(record, payload: payload)
             let folder = try Self.newFolder(record)
             let client = try await session.client()
-            switch try await client.push(document, folder: folder, progress: progress) {
+            switch try await client.push(document, folder: folder, parentName: record.folder, progress: progress) {
             case .sent:
                 return try record.sentNow(via: .cloud, library: library, tabletID: record.id)
             case .unknown(let reason):

@@ -99,6 +99,8 @@ rePossess uses the one top-level folder in its copy of your library
 that has exactly that name.
 If none has the name, it creates the folder with the document.
 If two or more have it, rePossess sends nothing and lists them.
+Before it sends, it checks that the cloud's folder is still at the top level with that name,
+and refuses the push if someone renamed or moved it.
 Nested paths are not supported, and a name cannot contain `/`.
 The USB web interface cannot choose or create a folder,
 so a push with a folder always goes through the cloud

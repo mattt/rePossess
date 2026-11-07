@@ -110,7 +110,7 @@ public struct Pusher: Sendable {
     /// Makes a notebook from Markdown, queues it, and sends what waits.
     ///
     /// - Parameters:
-    ///   - folder: The name of a top-level folder; see ``Library/pushFolder(named:now:)``.
+    ///   - folder: The name of a top-level folder; see ``Library/pushFolder(named:)``.
     ///     A name that two folders share refuses the push before anything is queued.
     public func pushMarkdown(
         title: String,
