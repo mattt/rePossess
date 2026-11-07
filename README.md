@@ -7,7 +7,7 @@ and makes them available through MCP (Model Context Protocol).
 Your client can search documents, read text, and view page images.
 Optional handwriting recognition makes handwritten notes searchable too.
 
-Version 0.1.0 is a limited preview.
+Version 0.2.0 is a limited preview.
 Manual checks cover a reMarkable Paper Pure running software 3.29.0.153,
 Claude Code, and Claude Desktop; they do not cover every workflow.
 Other tablet models and Codex have not been verified.
@@ -19,7 +19,7 @@ You need a reMarkable tablet with its USB web interface enabled,
 or a reMarkable account that syncs with the tablet.
 
 1. Download the ZIP from the
-   [0.1.0 release page](https://github.com/mattt/rePossess/releases/tag/0.1.0)
+   [0.2.0 release page](https://github.com/mattt/rePossess/releases/tag/0.2.0)
    and expand it.
 2. Move rePossess.app to `/Applications`, then open it.
 3. Open Settings from the rePossess menu bar icon.
@@ -272,7 +272,7 @@ mise run release:prepare
 
 This checks the code, builds and signs the app, submits it for notarization,
 staples the ticket, checks Gatekeeper acceptance,
-and creates `dist/rePossess-0.1.0.zip` and its `.sha256` checksum.
+and creates `dist/rePossess-0.2.0.zip` and its `.sha256` checksum.
 It requires a clean worktree and records the source commit in the app.
 It does not push or publish.
 The `release:build`, `release:notarize`, `release:staple`,
@@ -282,7 +282,7 @@ Investigate a rejected notarization through its submission log before retrying.
 Expand the final ZIP and check the bundled helper and resources.
 Check first launch and permissions with a downloaded copy on another Mac,
 and check tablet and MCP client workflows before publishing.
-Tag the packaged source commit as `0.1.0`
+Tag the packaged source commit as `0.2.0`
 and attach the ZIP and checksum to the GitHub release for that tag.
 
 ## License and acknowledgments

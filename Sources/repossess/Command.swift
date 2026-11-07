@@ -8,7 +8,7 @@ import RePossessRecognize
 import RePossessRender
 import RePossessUSB
 
-let version = "0.1.0"
+let version = "0.2.0"
 
 let usage = """
     usage: repossess <command> [options]
