@@ -124,9 +124,17 @@ public struct CloudClient: Sendable {
     /// When the root lists the folder, a read of its `.metadata` must show a folder that is not in the trash,
     /// is at the top level, and has the expected name (`parentName`, or else the new folder's name).
     /// A folder that someone renamed or moved after rePossess chose its ID is refused, and nothing is sent.
-    /// The check runs again on every attempt, because a rename or move during the upload
+    /// This check runs again on every attempt, because a rename or move during the upload
     /// can be the cause of a generation conflict.
-    /// When it does not, `folder` must be the new folder with that ID, and the same root update adds both.
+    ///
+    /// When the root does not list the folder, `folder` must be the new folder with that ID,
+    /// and the same root update adds both.
+    /// Before it adds the folder, it reads the root's entries that the caller does not know
+    /// (`knownEntries` maps an ID to the hash that the caller has read),
+    /// and refuses the push, with nothing sent, if one is a live top-level folder
+    /// whose name matches the new folder's name without regard to case.
+    /// It does not use that folder instead, because the document's files already name the new folder as their parent.
+    /// A root with more than ``maxUnknownEntries`` unknown entries is refused too, because reading them all is slow.
     /// A document with a `parent` and no such folder is refused, and nothing is sent.
     ///
     /// It reads the root, plans the upload in the account's schema, uploads every blob,
@@ -151,9 +159,11 @@ public struct CloudClient: Sendable {
         _ document: NewDocument,
         folder: NewFolder? = nil,
         parentName: String? = nil,
+        knownEntries: [String: String] = [:],
         attempts: Int = 3,
         progress: @Sendable (String) -> Void = { _ in }
     ) async throws -> CloudPushOutcome {
+        var clearedHashes = Set<String>()
         for attempt in 1 ... max(attempts, 1) {
             let (root, index) = try await rootIndex()
             if index.entries.contains(where: { $0.id == document.documentID }) {
@@ -165,6 +175,12 @@ public struct CloudClient: Sendable {
                 if let entry = index.entries.first(where: { $0.id == document.parent }) {
                     try await requireLiveFolder(entry, name: parentName ?? folder?.visibleName)
                 } else if let folder, folder.folderID == document.parent {
+                    try await requireNoFolder(
+                        named: folder.visibleName,
+                        in: index,
+                        known: knownEntries,
+                        cleared: &clearedHashes
+                    )
                     newFolder = folder
                 } else {
                     throw CloudError.invalidUpload(
@@ -206,6 +222,51 @@ public struct CloudClient: Sendable {
         throw CloudError.generationConflict
     }
 
+    /// The most root entries that a push into a new folder reads to look for a folder with the same name.
+    public static let maxUnknownEntries = 25
+
+    /// Refuses the push when a root entry is a live top-level folder with the name, in any case.
+    /// Entries whose hash the caller knows are skipped, and so are entries that an earlier attempt cleared.
+    private func requireNoFolder(
+        named name: String,
+        in index: SyncIndex,
+        known: [String: String],
+        cleared: inout Set<String>
+    ) async throws {
+        let unknown = index.entries.filter { known[$0.id] != $0.hash && !cleared.contains($0.hash) }
+        guard unknown.count <= Self.maxUnknownEntries else {
+            throw CloudError.invalidUpload(
+                "the cloud root has \(unknown.count) entries that the library has not read, "
+                    + "so rePossess cannot tell whether one is a folder named \"\(name)\"; \(Self.afterRefusal)"
+            )
+        }
+        for entry in unknown {
+            if let metadata = try await metadata(of: entry), metadata["type"] as? String == "CollectionType",
+                (metadata["parent"] as? String ?? "").isEmpty, metadata["deleted"] as? Bool != true,
+                let found = metadata["visibleName"] as? String,
+                found.compare(name, options: .caseInsensitive) == .orderedSame
+            {
+                throw CloudError.invalidUpload(
+                    "the cloud root has a top-level folder named \"\(found)\" (ID \(entry.id)) "
+                        + "that the library does not list, so rePossess did not make a second folder named \"\(name)\"; "
+                        + Self.afterRefusal
+                )
+            }
+            cleared.insert(entry.hash)
+        }
+    }
+
+    /// The `.metadata` of a root entry, or `nil` when the entry has none or it is not a JSON object.
+    private func metadata(of entry: IndexEntry) async throws -> [String: Any]? {
+        let fetched = try await index(id: entry.id, hash: entry.hash)
+        guard fetched.hashMatches else {
+            throw CloudError.hashMismatch(expected: entry.hash, actual: (try? fetched.index.hash()) ?? "")
+        }
+        guard let file = fetched.index.entries.first(where: { $0.id == "\(entry.id).metadata" }) else { return nil }
+        let data = try await self.file(file)
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
     /// Reads a folder's `.metadata` and requires a top-level folder that is not in the trash,
     /// with the given name when there is one.
     private func requireLiveFolder(_ entry: IndexEntry, name: String?) async throws {
@@ -238,9 +299,11 @@ public struct CloudClient: Sendable {
         }
     }
 
-    /// The next step after a refused folder. Once a refresh lists the folder with its new name or place,
-    /// the library no longer lends its ID, so the next push to the old name makes a new folder.
-    private static let afterRefusal = "refresh the library, then push again; the name then gets a new folder"
+    /// The next step after a refused folder. The refused push added nothing and is not retried.
+    /// A refresh lists the folders as they are now, and a new push picks its folder from that list:
+    /// the one top-level folder that has the name, or a new folder when none has it.
+    public static let afterRefusal =
+        "the push added nothing; refresh the library, then push again, and the new push picks its folder from the refreshed library"
 
     /// After a root update without an answer, reads the root and looks for the document.
     private func check(

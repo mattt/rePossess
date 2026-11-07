@@ -91,6 +91,8 @@ func json(_ result: CallTool.Result) throws -> [String: Any] {
                 "fetch_page_chunks", "recognize_pages", "refresh_documents", "push_markdown", "push_file", "status",
             ]
         )
+        #expect(serverInstructions.contains("never call them again to retry a push whose status is queued or unknown"))
+        #expect(serverInstructions.contains("A push whose status is failed added nothing, so a new push is allowed"))
         for tool in RePossessTools.all {
             let schema = tool.inputSchema.objectValue ?? [:]
             #expect(schema["additionalProperties"] == false, "\(tool.name)")
@@ -101,7 +103,11 @@ func json(_ result: CallTool.Result) throws -> [String: Any] {
                 #expect(tool.annotations.destructiveHint == false && tool.annotations.idempotentHint == false)
                 let description = tool.description ?? ""
                 #expect(description.contains("every call creates a new document"))
-                #expect(description.contains("Do not call it again to retry"))
+                #expect(description.contains("Do not call it again to retry a push that is \"queued\" or \"unknown\""))
+                #expect(
+                    description.contains("\"failed\" means it was refused and added nothing, so a new call is allowed")
+                )
+                #expect(description.contains("without regard to case"))
                 #expect(description.contains("Limits:"))
             }
         }

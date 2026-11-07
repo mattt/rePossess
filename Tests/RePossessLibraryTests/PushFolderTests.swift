@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import RePossessCloud
@@ -374,6 +375,199 @@ private func mirroredGarden() async throws -> (library: Library, cloud: FakeClou
         let stored = try #require(try reopened.push(id: record.id))
         #expect(stored.folder == "Biology 101" && stored.folderID == record.folderID && stored.folderIsNew == true)
     }
+
+    // MARK: Names that differ only in case
+
+    @Test func aFolderThatDiffersOnlyInCaseRefusesThePush() async throws {
+        let (library, _, _) = try await mirroredFolders([(folderC1, "PA 518")])
+        let error = try #require(throws: PushError.self, performing: { _ = try queue(library, folder: "pa 518") })
+        #expect(error.description.contains("\"PA 518\" (ID \(folderC1)"))
+        #expect(error.description.contains("differs only in case"))
+        #expect(try library.pushes().isEmpty)
+
+        let exact = try queue(library, folder: "PA 518")
+        #expect(exact.folderID == folderC1 && exact.folderIsNew == false)
+    }
+
+    @Test func theExactSpellingPicksAmongFoldersThatDifferInCase() async throws {
+        let (library, _, _) = try await mirroredFolders([(folderC1, "Math"), (folderC2, "MATH")])
+        #expect(try library.pushFolder(named: "Math").id == folderC1)
+        #expect(try library.pushFolder(named: "MATH").id == folderC2)
+        let error = try #require(throws: PushError.self, performing: { _ = try library.pushFolder(named: "math") })
+        #expect(error.description.contains(folderC1) && error.description.contains(folderC2))
+    }
+
+    @Test func aPendingFolderThatDiffersOnlyInCaseRefusesThePush() throws {
+        let library = try temporaryLibrary()
+        let first = try queue(library, folder: "Biology 101")
+        let error = try #require(
+            throws: PushError.self,
+            performing: { _ = try queue(library, folder: "biology 101") }
+        )
+        #expect(error.description.contains("\"Biology 101\"") && error.description.contains("only in case"))
+        #expect(try library.pushes().count == 1)
+        #expect(try queue(library, folder: "Biology 101").folderID == first.folderID)
+    }
+
+    // MARK: A folder made after the push was queued
+
+    @Test func aFolderMadeAfterTheQueueingRefusesThePushWithoutWriting() async throws {
+        let cloud = try await emptyCloud()
+        let session = cloudSession(cloud)
+        let library = try temporaryLibrary()
+        let queued = try queue(library, folder: "Biology 101")
+        #expect(queued.folderIsNew == true)
+        try await changeFolder(cloud, id: folderC1, name: "Biology 101", parent: "")
+        let before = try await cloud.currentRootIndex().entries
+
+        let failed = try #require(try await library.sendPushes(paths: PushPaths(usb: nil, cloud: session)).first)
+        #expect(failed.status == .failed)
+        let message = try #require(failed.error)
+        #expect(message.contains("top-level folder named \"Biology 101\" (ID \(folderC1))"))
+        #expect(message.contains("the push added nothing; refresh the library, then push again"))
+        #expect(await cloud.writes.isEmpty)
+        #expect(try await cloud.currentRootIndex().entries == before)
+
+        // After a refresh, a new push uses the folder that is there. The failed push is not sent again.
+        _ = try await library.refreshCloud(session: session)
+        let again = try queue(library, folder: "Biology 101")
+        #expect(again.folderID == folderC1 && again.folderIsNew == false)
+        let sent = try await library.sendPushes(paths: PushPaths(usb: nil, cloud: session))
+        #expect(sent.map(\.id) == [again.id] && sent.first?.status == .sent)
+        #expect(try await metadata(cloud, id: again.id)["parent"] as? String == folderC1)
+        #expect(try library.push(id: queued.id)?.status == .failed)
+        #expect(try await cloud.currentRootIndex().entries.count == before.count + 1)
+    }
+
+    @Test(arguments: [
+        ("biology 101", "", PushStatus.failed),
+        ("Biology 101", "", PushStatus.failed),
+        ("Biology 101", "trash", PushStatus.sent),
+        ("Biology 101", "f0000000-0000-4000-8000-0000000000b1", PushStatus.sent),
+        ("Biology 201", "", PushStatus.sent),
+    ])
+    func onlyALiveTopLevelFolderWithTheNameBlocksANewFolder(name: String, parent: String, status: PushStatus)
+        async throws
+    {
+        let cloud = try await emptyCloud()
+        let library = try temporaryLibrary()
+        _ = try queue(library, folder: "Biology 101")
+        try await changeFolder(cloud, id: folderC1, name: name, parent: parent)
+        let result = try #require(
+            try await library.sendPushes(paths: PushPaths(usb: nil, cloud: cloudSession(cloud))).first
+        )
+        #expect(result.status == status)
+        #expect(await rootUpdates(cloud) == (status == .sent ? 1 : 0))
+    }
+
+    @Test func aFolderThatTheLibraryListedAfterTheQueueingRefusesThePush() async throws {
+        let cloud = try await emptyCloud()
+        let session = cloudSession(cloud)
+        let library = try temporaryLibrary()
+        _ = try queue(library, folder: "Biology 101")
+        try await changeFolder(cloud, id: folderC1, name: "Biology 101", parent: "")
+        _ = try await library.refreshCloud(session: session)
+        await cloud.clearRequests()
+
+        let failed = try #require(try await library.sendPushes(paths: PushPaths(usb: nil, cloud: session)).first)
+        #expect(failed.status == .failed && failed.error?.contains("the library lists a top-level folder") == true)
+        #expect(await cloud.requests.isEmpty)
+    }
+
+    @Test func aRootWithManyUnreadEntriesAsksForARefresh() async throws {
+        let cloud = try await emptyCloud()
+        let session = cloudSession(cloud)
+        let library = try temporaryLibrary()
+        for number in 0 ..< CloudClient.maxUnknownEntries + 1 {
+            let id = String(format: "f0000000-0000-4000-8000-%012d", number + 100)
+            try await changeFolder(cloud, id: id, name: "Other \(number)", parent: "")
+        }
+        _ = try queue(library, folder: "Biology 101")
+        let failed = try #require(try await library.sendPushes(paths: PushPaths(usb: nil, cloud: session)).first)
+        #expect(failed.status == .failed && failed.error?.contains("the library has not read") == true)
+        #expect(await cloud.writes.isEmpty)
+
+        // The refresh tells the library which entries it knows, so the next push reads none of them.
+        _ = try await library.refreshCloud(session: session)
+        await cloud.clearRequests()
+        let again = try queue(library, folder: "Biology 101")
+        let sent = try #require(try await library.sendPushes(paths: PushPaths(usb: nil, cloud: session)).first)
+        #expect(sent.id == again.id && sent.status == .sent)
+        let reads = await cloud.requests.filter { $0.method == "GET" && $0.url.path().contains("/sync/v3/files/") }
+        #expect(reads.count == 1)
+    }
+
+    // MARK: Folder IDs that the mirror has seen
+
+    @Test func aFolderIDThatARefreshRemovedIsNotLentAgain() async throws {
+        let cloud = try await emptyCloud()
+        let session = cloudSession(cloud)
+        let library = try temporaryLibrary()
+        let first = try queue(library, folder: "Biology 101")
+        let oldID = try #require(first.folderID)
+
+        // The cloud lists the planned ID as a renamed folder, and then deletes it for good.
+        try await changeFolder(cloud, id: oldID, name: "Renamed", parent: "")
+        _ = try await library.refreshCloud(session: session)
+        #expect(try library.item(id: oldID) != nil)
+        try await cloud.seedRoot(try await cloud.currentRootIndex().entries.filter { $0.id != oldID })
+        _ = try await library.refreshCloud(session: session)
+        #expect(try library.item(id: oldID) == nil)
+
+        let later = try queue(library, folder: "Biology 101")
+        #expect(later.folderIsNew == true && later.folderID != oldID)
+    }
+
+    @Test func aLibraryFromBeforeVersion6RecordsItsFoldersAsSeen() async throws {
+        let (library, _, _) = try await mirroredFolders([(folderC1, "Math")])
+        #expect(try library.database.query("SELECT id FROM seen_folders").compactMap { $0[0].string } == [folderC1])
+        try library.database.execute("DROP TABLE seen_folders; PRAGMA user_version = 5;")
+        let reopened = try Library(root: library.root)
+        #expect(try reopened.database.query("SELECT id FROM seen_folders").compactMap { $0[0].string } == [folderC1])
+    }
+
+    // MARK: The transaction
+
+    @Test func aSecondEnqueueWaitsForTheFirstOnesTransaction() throws {
+        let library = try temporaryLibrary()
+        let other = try Library(root: library.root)
+        let second = Mutex<PushRecord?>(nil)
+        let finished = DispatchSemaphore(value: 0)
+        library.afterFolderLookup.withLock {
+            $0 = {
+                // The first enqueue has chosen its folder ID and has not inserted its row.
+                // A second process that queues now must wait for the first to commit.
+                // Without the transaction, it would look up the folder in this window, find nothing, and choose its own ID.
+                Thread.detachNewThread {
+                    second.withLock { $0 = try? queue(other, title: "rePossess test second", folder: "Biology 101") }
+                    finished.signal()
+                }
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+        }
+        let first = try queue(library, title: "rePossess test first", folder: "Biology 101")
+        library.afterFolderLookup.withLock { $0 = nil }
+        finished.wait()
+        let other_ = try #require(second.withLock { $0 })
+        #expect(first.folderIsNew == true && other_.folderID == first.folderID)
+        #expect(try library.pushes().count == 2)
+    }
+}
+
+private let folderC1 = "f0000000-0000-4000-8000-0000000000c1"
+private let folderC2 = "f0000000-0000-4000-8000-0000000000c2"
+
+/// A library that mirrors a fake cloud whose top level holds only the given folders.
+private func mirroredFolders(_ folders: [(id: String, name: String)]) async throws
+    -> (library: Library, cloud: FakeCloud, session: CloudSession)
+{
+    let cloud = try await emptyCloud()
+    for folder in folders { try await changeFolder(cloud, id: folder.id, name: folder.name, parent: "") }
+    let session = cloudSession(cloud)
+    let library = try temporaryLibrary()
+    _ = try await library.refreshCloud(session: session)
+    await cloud.clearRequests()
+    return (library, cloud, session)
 }
 
 /// Queues an invented Markdown note, with a folder or without one.

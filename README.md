@@ -90,21 +90,36 @@ until a later refresh or push can send it.
 If a push reports a queued or unknown result, don't repeat the request:
 each request creates another document.
 Check its status before sending again.
+A failed push was refused and added nothing,
+so a new push is allowed after you fix the cause that its error names.
 
 A push can name a top-level folder, such as a course:
 ask your client to "Send these notes to my Biology 101 folder."
 The client passes the name in the `folder` argument of `push_markdown` or `push_file`,
 and the command-line helper takes `--folder <name>`.
+Names match without regard to case.
 rePossess uses the one top-level folder in its copy of your library
-that has exactly that name.
-If none has the name, it creates the folder with the document.
-If two or more have it, rePossess sends nothing and lists them.
+that has exactly that name, even if another folder differs from it only in case.
+If no folder has the name in any case, it creates the folder with the document.
+If two or more have the exact name,
+or the only match differs in case (you ask for "pa 518" and the library has "PA 518"),
+rePossess sends nothing and names the folders,
+so that it does not make a near-duplicate.
 Before it sends, it checks that the cloud's folder is still at the top level with that name,
 and refuses the push if someone renamed or moved it.
+When the push would create a folder,
+it also reads the cloud's top level for a folder with that name that your library
+has not listed yet, such as one made on the tablet after you queued the push.
+If it finds one, it refuses the push instead of making a second folder or redirecting the document.
+A refused push is marked failed and added nothing;
+refresh the library and push again, and the new push picks its folder from the refreshed library.
+If the cloud has more than 25 entries that your library has not read,
+rePossess does not read them all and asks for a refresh first.
 Nested paths are not supported, and a name cannot contain `/`.
 The USB web interface cannot choose or create a folder,
 so a push with a folder always goes through the cloud
 and waits in the queue until rePossess is paired.
+`--usb` with `--folder` is a usage error.
 Creating a folder through the cloud is unverified on a real tablet.
 A new folder is a new item: rePossess never renames, moves, or deletes
 an existing folder or document.

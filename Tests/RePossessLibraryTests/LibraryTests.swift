@@ -534,7 +534,7 @@ actor Waits {
         #expect(pages[0].markdown == "# Invented heading\n\nThen a table:\n\n[Image: see fetch_page_image for page 1.]")
         let hit = try #require(try reopened.search("invented").hits.first { $0.match == .text })
         #expect(hit.snippet == "Invented heading Then a table:")
-        #expect(try reopened.database.query("PRAGMA user_version").first?.first?.int == 5)
+        #expect(try reopened.database.query("PRAGMA user_version").first?.first?.int == 6)
     }
 
     @Test func searchTextDropsMarkers() {
