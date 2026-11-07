@@ -124,6 +124,8 @@ public struct CloudClient: Sendable {
     /// When the root lists the folder, a read of its `.metadata` must show a folder that is not in the trash,
     /// is at the top level, and has the expected name (`parentName`, or else the new folder's name).
     /// A folder that someone renamed or moved after rePossess chose its ID is refused, and nothing is sent.
+    /// The check runs again on every attempt, because a rename or move during the upload
+    /// can be the cause of a generation conflict.
     /// When it does not, `folder` must be the new folder with that ID, and the same root update adds both.
     /// A document with a `parent` and no such folder is refused, and nothing is sent.
     ///
@@ -152,7 +154,6 @@ public struct CloudClient: Sendable {
         attempts: Int = 3,
         progress: @Sendable (String) -> Void = { _ in }
     ) async throws -> CloudPushOutcome {
-        var verifiedFolder = false
         for attempt in 1 ... max(attempts, 1) {
             let (root, index) = try await rootIndex()
             if index.entries.contains(where: { $0.id == document.documentID }) {
@@ -162,10 +163,7 @@ public struct CloudClient: Sendable {
             var newFolder: NewFolder?
             if !document.parent.isEmpty {
                 if let entry = index.entries.first(where: { $0.id == document.parent }) {
-                    if !verifiedFolder {
-                        try await requireLiveFolder(entry, name: parentName ?? folder?.visibleName)
-                        verifiedFolder = true
-                    }
+                    try await requireLiveFolder(entry, name: parentName ?? folder?.visibleName)
                 } else if let folder, folder.folderID == document.parent {
                     newFolder = folder
                 } else {
@@ -225,20 +223,24 @@ public struct CloudClient: Sendable {
             throw CloudError.invalidUpload("\(entry.id) is not a folder")
         }
         if metadata["parent"] as? String == "trash" || metadata["deleted"] as? Bool == true {
-            throw CloudError.invalidUpload("the folder \(entry.id) is in the trash")
+            throw CloudError.invalidUpload("the folder \(entry.id) is in the trash; \(Self.afterRefusal)")
         }
         if let parent = metadata["parent"] as? String, !parent.isEmpty {
             throw CloudError.invalidUpload(
-                "the folder \(entry.id) is no longer at the top level, so rePossess does not put a document in it"
+                "the folder \(entry.id) is no longer at the top level, so rePossess does not put a document in it; \(Self.afterRefusal)"
             )
         }
         if let name, metadata["visibleName"] as? String != name {
             let found = (metadata["visibleName"] as? String).map { "\"\($0)\"" } ?? "no name"
             throw CloudError.invalidUpload(
-                "the folder \(entry.id) is named \(found), not \"\(name)\", so rePossess does not put a document in it"
+                "the folder \(entry.id) is named \(found), not \"\(name)\", so rePossess does not put a document in it; \(Self.afterRefusal)"
             )
         }
     }
+
+    /// The next step after a refused folder. Once a refresh lists the folder with its new name or place,
+    /// the library no longer lends its ID, so the next push to the old name makes a new folder.
+    private static let afterRefusal = "refresh the library, then push again; the name then gets a new folder"
 
     /// After a root update without an answer, reads the root and looks for the document.
     private func check(

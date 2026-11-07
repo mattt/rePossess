@@ -19,13 +19,7 @@ private func rootUpdates(_ cloud: FakeCloud) async -> Int {
 
 /// Renames or moves a folder in the fake cloud, as another client would: the folder's entry gets new metadata.
 private func changeFolder(_ cloud: FakeCloud, id: String, name: String, parent: String) async throws {
-    let json = "{\"visibleName\": \"\(name)\", \"type\": \"CollectionType\", \"parent\": \"\(parent)\"}"
-    let entry = try await cloud.seedDocument(
-        id: id,
-        files: [("\(id).metadata", Data(json.utf8)), ("\(id).content", Data("{}".utf8))]
-    )
-    let others = try await cloud.currentRootIndex().entries.filter { $0.id != id }
-    try await cloud.seedRoot(others + [entry])
+    try await cloud.changeFolder(id: id, name: name, parent: parent)
 }
 
 /// A library that mirrors a fake cloud with one folder, "Garden", and its documents.
@@ -155,6 +149,28 @@ private func mirroredGarden() async throws -> (library: Library, cloud: FakeClou
         #expect(moved.id == third.id && moved.status == .failed)
         #expect(moved.error?.contains("no longer at the top level") == true)
         #expect(await rootUpdates(cloud) == 0)
+    }
+
+    @Test(arguments: [("Orchard", ""), ("Garden", "f0000000-0000-4000-8000-0000000000b1")])
+    func aFolderChangedDuringTheUploadIsCheckedAgainOnTheRetry(name: String, parent: String) async throws {
+        let (library, cloud, session) = try await mirroredGarden()
+        let before = try await cloud.currentRootIndex().entries.map(\.id)
+        let record = try library.enqueuePush(
+            kind: .pdf,
+            title: "rePossess test pdf",
+            data: makePDF(["Invented"]),
+            folder: "Garden"
+        )
+        // The first root update finds a new generation, and another client changed the folder at the same time.
+        await cloud.set(interveningSyncs: 1)
+        await cloud.set(interveningFolderChange: (id: Shelf.folder, name: name, parent: parent))
+
+        let failed = try #require(try await library.sendPushes(paths: PushPaths(usb: nil, cloud: session)).first)
+        #expect(failed.id == record.id && failed.status == .failed)
+        #expect(failed.error?.contains("refresh the library, then push again") == true)
+        // One root update was tried, and the retry did not send a second one.
+        #expect(await rootUpdates(cloud) == 1)
+        #expect(try await cloud.currentRootIndex().entries.map(\.id).sorted() == before.sorted())
     }
 
     @Test(arguments: ["", "trash"])
