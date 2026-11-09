@@ -257,6 +257,27 @@ For rendering work, `scripts/compare_layout.py` compares the helper's
 
 ## Releasing
 
+To release, set `version` in `Sources/repossess/Command.swift`,
+merge the change to `main`,
+and push a tag that names that version, such as `0.2.0`.
+The [release workflow](.github/workflows/release.yml) checks that the tag matches `version`,
+then lints, tests, builds, signs, notarizes, staples, verifies, and packages the app.
+When all of that succeeds, it creates a draft GitHub release for the tag,
+uploads the ZIP and checksum, downloads them again to compare,
+and only then publishes the release.
+Run the workflow by hand with `dry_run` on to do everything except publish;
+it attaches the ZIP and checksum to the run.
+A manual run that publishes must start from the tag of its version.
+
+The workflow reads five repository secrets:
+
+- `MACOS_CERTIFICATE_P12`: the Developer ID Application certificate and private key, as base64.
+- `MACOS_CERTIFICATE_PASSWORD`: the password of that `.p12` file.
+- `APP_STORE_CONNECT_PRIVATE_KEY`: the contents of the App Store Connect API key (`.p8`).
+- `APP_STORE_CONNECT_KEY_ID`: the key's ID.
+- `APP_STORE_CONNECT_ISSUER_ID`: the issuer ID.
+
+To release from your own Mac instead, follow the steps below.
 Use Xcode 27 or later, mise, ShellCheck,
 and a Developer ID Application certificate with its private key in the Keychain.
 Set `REPOSSESS_SIGNING_IDENTITY` to select the release certificate.
@@ -282,8 +303,13 @@ Investigate a rejected notarization through its submission log before retrying.
 Expand the final ZIP and check the bundled helper and resources.
 Check first launch and permissions with a downloaded copy on another Mac,
 and check tablet and MCP client workflows before publishing.
-Tag the packaged source commit as `0.2.0`
-and attach the ZIP and checksum to the GitHub release for that tag.
+Tag the packaged source commit as `0.2.0`.
+`gh release create --verify-tag` needs the tag on GitHub,
+and a pushed tag starts the workflow,
+so disable the workflow first if you publish by hand.
+To publish the ZIP and checksum from your Mac, run `scripts/release.sh publish` with an authenticated `gh`.
+It drafts the release, uploads the files, compares the download, and then publishes.
+The `draft`, `upload`, `check-upload`, and `undraft` subcommands run its steps one at a time.
 
 ## License and acknowledgments
 

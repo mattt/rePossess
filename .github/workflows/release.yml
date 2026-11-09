@@ -1,0 +1,144 @@
+name: Release
+
+on:
+    push:
+        tags: ["[0-9]+.[0-9]+.[0-9]+"]
+    workflow_dispatch:
+        inputs:
+            version:
+                description: "Version to release; empty means the tag this run starts from"
+                type: string
+                default: ""
+            dry_run:
+                description: "Build and validate without creating the GitHub release"
+                type: boolean
+                default: true
+
+permissions:
+    contents: write
+
+concurrency:
+    group: release-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    release:
+        name: Build, notarize, and publish
+        runs-on: xcode-27
+        env:
+            DEVELOPER_DIR: "/Applications/Xcode_27.0.app/Contents/Developer"
+            REPOSSESS_SIGNING_IDENTITY: "Developer ID Application: dododo, LLC (TTY35UM57S)"
+        timeout-minutes: 90
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v6
+
+            - name: Resolve version
+              id: version
+              env:
+                  EVENT_NAME: ${{ github.event_name }}
+                  REF_TYPE: ${{ github.ref_type }}
+                  REF_NAME: ${{ github.ref_name }}
+                  INPUT_VERSION: ${{ inputs.version }}
+                  INPUT_DRY_RUN: ${{ inputs.dry_run }}
+              run: |
+                  set -euo pipefail
+                  source_version="$(sed -n 's/^let version = "\(.*\)"$/\1/p' Sources/repossess/Command.swift)"
+                  dry_run=false
+                  if [[ "$EVENT_NAME" == "push" ]]; then
+                      version="$REF_NAME"
+                  else
+                      dry_run="$INPUT_DRY_RUN"
+                      version="$INPUT_VERSION"
+                      if [[ -z "$version" && "$REF_TYPE" == "tag" ]]; then
+                          version="$REF_NAME"
+                      fi
+                      if [[ -z "$version" && "$dry_run" == "true" ]]; then
+                          version="$source_version"
+                      fi
+                      if [[ "$dry_run" != "true" && ( "$REF_TYPE" != "tag" || "$REF_NAME" != "$version" ) ]]; then
+                          echo "error: a publishing run must start from the tag $version, not $REF_TYPE $REF_NAME" >&2
+                          exit 1
+                      fi
+                  fi
+                  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                      echo "error: invalid version: $version" >&2
+                      exit 1
+                  fi
+                  if [[ "$version" != "$source_version" ]]; then
+                      echo "error: version $version does not match $source_version in Sources/repossess/Command.swift" >&2
+                      exit 1
+                  fi
+                  echo "version=$version" >> "$GITHUB_OUTPUT"
+                  echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+
+            - name: Import signing certificate
+              env:
+                  MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+                  MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+              run: |
+                  set -euo pipefail
+                  keychain="$RUNNER_TEMP/release.keychain-db"
+                  keychain_password="$(openssl rand -base64 32)"
+                  echo "::add-mask::$keychain_password"
+                  echo "KEYCHAIN_PATH=$keychain" >> "$GITHUB_ENV"
+                  certificate="$RUNNER_TEMP/certificate.p12"
+                  trap 'rm -f "$certificate"' EXIT
+                  printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$certificate"
+                  security create-keychain -p "$keychain_password" "$keychain"
+                  security set-keychain-settings -lut 21600 "$keychain"
+                  security unlock-keychain -p "$keychain_password" "$keychain"
+                  security import "$certificate" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+                  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+                  security list-keychains -d user -s "$keychain" login.keychain-db
+
+            - name: Write notarization key
+              env:
+                  APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+              run: |
+                  set -euo pipefail
+                  key_file="$RUNNER_TEMP/AuthKey.p8"
+                  (umask 077 && printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$key_file")
+                  chmod 600 "$key_file"
+                  echo "NOTARY_KEY_FILE=$key_file" >> "$GITHUB_ENV"
+
+            - name: Install ShellCheck
+              run: command -v shellcheck > /dev/null || brew install shellcheck
+
+            - name: Lint, build, and test
+              run: |
+                  set -euo pipefail
+                  swift format lint --strict --recursive Package.swift Sources Tests
+                  shellcheck scripts/app.sh scripts/release.sh
+                  swift build
+                  swift test
+
+            - name: Build, notarize, staple, verify, and package
+              env:
+                  NOTARY_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+                  NOTARY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+              run: scripts/release.sh prepare
+
+            - name: Publish GitHub release
+              if: steps.version.outputs.dry_run != 'true'
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: scripts/release.sh publish
+
+            - name: Attach package
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: rePossess-${{ steps.version.outputs.version || 'unversioned' }}
+                  path: |
+                      dist/*.zip
+                      dist/*.sha256
+                  if-no-files-found: warn
+
+            - name: Delete temporary keychain
+              if: always()
+              run: |
+                  if [[ -n "${KEYCHAIN_PATH:-}" ]]; then
+                      security delete-keychain "$KEYCHAIN_PATH" || true
+                  fi
+                  rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/certificate.p12"
