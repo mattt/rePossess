@@ -1,5 +1,6 @@
 #!/bin/bash
-# Prepare the same direct-download format as iMCP without publishing it.
+# Prepare the same direct-download format as iMCP.
+# Only the draft, upload, check-upload, undraft, and publish steps touch GitHub.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -103,6 +104,95 @@ package_release() {
     echo "Prepared $package and $package.sha256; nothing was published"
 }
 
+require_package() {
+    if [[ ! -f "$package" || ! -f "$package.sha256" ]]; then
+        echo "error: package the release with mise run release:package" >&2
+        exit 1
+    fi
+    (cd "$dist" && shasum -a 256 -c "$(basename "$package").sha256" > /dev/null)
+}
+
+# Print "draft" or "published" for this version's release, or nothing if there is none.
+release_state() {
+    local is_draft
+    if ! is_draft="$(gh release view "$version" --json isDraft --jq .isDraft 2> /dev/null)"; then
+        return 0
+    fi
+    if [[ "$is_draft" == "true" ]]; then
+        echo draft
+    else
+        echo published
+    fi
+}
+
+require_draft() {
+    if [[ "$(release_state)" != "draft" ]]; then
+        echo "error: there is no draft release $version; run scripts/release.sh draft" >&2
+        exit 1
+    fi
+}
+
+draft_release() {
+    require_package
+    case "$(release_state)" in
+        published)
+            echo "error: release $version is already published" >&2
+            exit 1
+            ;;
+        draft)
+            echo "Reusing the existing draft release $version"
+            ;;
+        *)
+            gh release create "$version" --draft --generate-notes --verify-tag --title "$version"
+            ;;
+    esac
+}
+
+upload_release() {
+    require_package
+    require_draft
+    gh release upload "$version" "$package" "$package.sha256" --clobber
+}
+
+# Download the uploaded assets through their API URLs, which also work for a draft,
+# then compare them with the local files and check the recorded checksum.
+check_upload() {
+    require_package
+    require_draft
+    local scratch name url
+    scratch="$(mktemp -d)"
+    for name in "$(basename "$package")" "$(basename "$package").sha256"; do
+        url="$(gh release view "$version" --json assets --jq ".assets[] | select(.name == \"$name\") | .apiUrl")"
+        if [[ -z "$url" ]]; then
+            echo "error: release $version has no asset $name" >&2
+            rm -rf "$scratch"
+            exit 1
+        fi
+        gh api -H "Accept: application/octet-stream" "$url" > "$scratch/$name"
+    done
+    if ! cmp -s "$scratch/$(basename "$package")" "$package" ||
+        ! (cd "$scratch" && shasum -a 256 -c "$(basename "$package").sha256" > /dev/null); then
+        echo "error: the uploaded ZIP differs from $package or fails its checksum" >&2
+        rm -rf "$scratch"
+        exit 1
+    fi
+    rm -rf "$scratch"
+    echo "Uploaded assets match $package and its checksum"
+}
+
+undraft_release() {
+    require_draft
+    gh release edit "$version" --draft=false --latest
+    echo "Published release $version"
+}
+
+publish_release() {
+    draft_release
+    upload_release
+    check_upload
+    undraft_release
+}
+
 case "${1:-help}" in
     build) build ;;
     notarize) notarize ;;
@@ -110,6 +200,11 @@ case "${1:-help}" in
     verify) verify ;;
     package) package_release ;;
     prepare) build; notarize; staple; package_release ;;
-    help) echo "Usage: scripts/release.sh {build|notarize|staple|verify|package|prepare}" ;;
+    draft) draft_release ;;
+    upload) upload_release ;;
+    check-upload) check_upload ;;
+    undraft) undraft_release ;;
+    publish) publish_release ;;
+    help) echo "Usage: scripts/release.sh {build|notarize|staple|verify|package|prepare|draft|upload|check-upload|undraft|publish}" ;;
     *) echo "error: unknown release step: $1" >&2; exit 64 ;;
 esac
