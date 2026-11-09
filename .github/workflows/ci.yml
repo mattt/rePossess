@@ -20,19 +20,18 @@ jobs:
             - name: Checkout code
               uses: actions/checkout@v6
 
-            # Key the cache on the exact Xcode build,
-            # so a runner image update can't restore build files
-            # compiled against an older toolchain.
+            # Cache only resolved packages, not .build:
+            # build products record the Metal toolchain's mount path,
+            # which changes between runners, so a restored .build fails to compile Metal files.
+            # Key the cache on the exact Xcode build as well.
             - name: Read Xcode build number
               id: xcode
               run: echo "build=$(xcodebuild -version | awk '/Build version/ {print $3}')" >> "${GITHUB_OUTPUT}"
 
-            - name: Cache SwiftPM build artifacts
+            - name: Cache SwiftPM packages
               uses: actions/cache@v5
               with:
-                  path: |
-                      .build
-                      ~/Library/Caches/org.swift.swiftpm
+                  path: ~/Library/Caches/org.swift.swiftpm
                   key: ${{ runner.os }}-xcode-${{ steps.xcode.outputs.build }}-spm-${{ hashFiles('Package.resolved') }}
                   restore-keys: |
                       ${{ runner.os }}-xcode-${{ steps.xcode.outputs.build }}-spm-
