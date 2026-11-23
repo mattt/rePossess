@@ -133,7 +133,8 @@ public struct RePossessTools: Sendable {
                 ],
                 "additionalProperties": false,
             ],
-            annotations: readOnly
+            annotations: readOnly,
+            outputSchema: listOutputSchema
         ),
         Tool(
             name: "search_documents",
@@ -158,7 +159,8 @@ public struct RePossessTools: Sendable {
                 "required": ["query"],
                 "additionalProperties": false,
             ],
-            annotations: readOnly
+            annotations: readOnly,
+            outputSchema: searchOutputSchema
         ),
         Tool(
             name: "fetch_document",
@@ -333,7 +335,8 @@ public struct RePossessTools: Sendable {
                 "required": ["title", "markdown"],
                 "additionalProperties": false,
             ],
-            annotations: write
+            annotations: write,
+            outputSchema: pushOutputSchema
         ),
         Tool(
             name: "push_file",
@@ -374,7 +377,8 @@ public struct RePossessTools: Sendable {
                 ],
                 "additionalProperties": false,
             ],
-            annotations: write
+            annotations: write,
+            outputSchema: pushOutputSchema
         ),
         Tool(
             name: "status",
@@ -384,7 +388,8 @@ public struct RePossessTools: Sendable {
                 the age of the mirror, the number of documents, the pushes that wait, and the handwriting recognizer.
                 """,
             inputSchema: ["type": "object", "properties": [:], "additionalProperties": false],
-            annotations: readOnly
+            annotations: readOnly,
+            outputSchema: statusOutputSchema
         ),
     ]
 
