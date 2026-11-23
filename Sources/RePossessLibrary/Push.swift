@@ -4,7 +4,7 @@ import RePossessFormat
 import RePossessUSB
 
 /// What a push sends.
-public enum PushKind: String, Sendable, Codable {
+public enum PushKind: String, Sendable, Codable, CaseIterable {
     /// A notebook made from Markdown, as an rmdoc archive.
     case notebook
     case pdf
