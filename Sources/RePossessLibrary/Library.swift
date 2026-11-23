@@ -6,7 +6,7 @@ import Synchronization
 ///
 /// A client looking for a handwritten notebook cannot tell one from a scanned PDF if both are `ink`,
 /// so the status separates ink on notebook pages, ink on PDF pages, and PDF pages without text.
-public enum ContentStatus: String, Sendable, Codable {
+public enum ContentStatus: String, Sendable, Codable, CaseIterable {
     /// Every page has text, or has nothing to read; a page may also have some ink.
     case text
     /// Some pages have text, and some notebook pages or PDF pages have none.
@@ -20,7 +20,7 @@ public enum ContentStatus: String, Sendable, Codable {
 }
 
 /// Where a document's files came from.
-public enum Source: String, Sendable, Codable {
+public enum Source: String, Sendable, Codable, CaseIterable {
     case usb
     case cloud
 }
@@ -87,7 +87,7 @@ public struct LibraryPage: Sendable, Equatable {
 /// One match from ``Library/search(_:limit:tag:)``.
 public struct SearchHit: Sendable, Equatable {
     /// What matched: the name, a tag, typed or PDF text, or recognized handwriting.
-    public enum Match: String, Sendable { case name, tag, text, handwriting }
+    public enum Match: String, Sendable, CaseIterable { case name, tag, text, handwriting }
 
     public var item: LibraryItem
     public var match: Match
