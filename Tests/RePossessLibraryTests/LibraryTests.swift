@@ -382,6 +382,36 @@ actor Waits {
         #expect(try library.pages(of: Shelf.handwritten).count == 3)
     }
 
+    @Test func usbRefreshKeepsDocumentsSeenOnlyInTheCloud() async throws {
+        let tablet = FakeTablet()
+        try await Shelf.stock(tablet)
+        await tablet.remove(id: Shelf.annotated)
+        let usbFolder = USBItem(
+            id: "f0000000-0000-4000-8000-000000000002",
+            type: "CollectionType",
+            visibleName: "Drafts"
+        )
+        await tablet.add(usbFolder)
+        let library = try temporaryLibrary()
+        let usb = USBClient(transport: tablet, checkInterface: { true })
+        _ = try await library.refreshUSB(client: usb)
+
+        let cloud = FakeCloud()
+        _ = try await Shelf.stock(cloud)
+        _ = try await library.refreshCloud(session: session(cloud))
+        #expect(try library.item(id: Shelf.handwritten)?.source == .cloud)
+
+        await tablet.remove(id: Shelf.handwritten)
+        await tablet.remove(id: usbFolder.id)
+        let report = try await library.refreshUSB(client: usb)
+        #expect(report.removed == 2)
+        #expect(try library.item(id: usbFolder.id) == nil)
+        #expect(try library.item(id: Shelf.handwritten) == nil)
+        #expect(try library.item(id: Shelf.annotated)?.name == "Reading")
+        #expect(try library.search("Walrus").hits.first?.item.id == Shelf.annotated)
+        #expect(try Data(contentsOf: library.folder(for: Shelf.annotated).pdfURL) == Shelf.pdf)
+    }
+
     @Test func removesOnlyWhatTheCloudListedBefore() async throws {
         let tablet = FakeTablet()
         try await Shelf.stock(tablet)
