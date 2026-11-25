@@ -121,7 +121,7 @@ extension Library {
     ///
     /// It lists every folder, then downloads the rmdoc of each document
     /// whose `ModifiedClient` differs from the library's, one request at a time.
-    /// After a complete listing, it removes items that the tablet no longer lists.
+    /// After a complete listing, it removes missing items whose stored source or version key shows USB read them.
     /// A timeout stops the refresh: what was downloaded stays, and the report says why it stopped.
     ///
     /// With `exports`, it then downloads the tablet's own PDF of each document with typed text
@@ -251,7 +251,9 @@ extension Library {
 
             if report.stoppedBy == nil {
                 let listed = Set(items.map(\.id))
-                let gone = try versions().keys.filter { !listed.contains($0) }
+                let gone = stored.filter { id, version in
+                    !listed.contains(id) && (version.usbModified != nil || version.source == .usb)
+                }.map(\.key)
                 try remove(ids: gone)
                 report.removed = gone.count
             }
